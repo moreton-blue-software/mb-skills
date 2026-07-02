@@ -37,10 +37,23 @@ Rules:
 
 ## Request Contract
 
-Send a JSON POST request to `EMBRACE_V2_TRPC_PROXY_ENDPOINT`:
+Send JSON POST requests to `EMBRACE_V2_TRPC_PROXY_ENDPOINT`.
+
+Discovery actions:
+
+```json
+{ "action": "download-index" }
+```
+
+```json
+{ "action": "download-procedure-schema", "path": "core.project.query" }
+```
+
+Execution action:
 
 ```json
 {
+  "action": "execute",
   "path": "core.project.query",
   "type": "query",
   "input": {
@@ -56,9 +69,22 @@ Fields:
 
 | Field | Rule |
 | --- | --- |
-| `path` | Required full Embrace v2 tRPC procedure path. |
-| `type` | Required. Use `query` or `mutation`. |
-| `input` | Optional procedure input object. Use `{}` when no input is needed. |
+| `action` | Optional. Use `download-index`, `download-procedure-schema`, or `execute`; missing action defaults to `execute`. |
+| `path` | Required for `execute` and `download-procedure-schema`. |
+| `type` | Required for `execute`. Use `query` or `mutation`. |
+| `input` | Optional procedure input object for `execute`. Use `{}` when no input is needed. |
+
+## Required Agent Flow
+
+When the procedure is not already explicitly provided by the user:
+
+1. Call `download-index` and save/search the returned index locally.
+2. Select the most likely procedure locally; do not ask the proxy to choose.
+3. Call `download-procedure-schema` for the selected `path`.
+4. Shape the input from the returned schema.
+5. Call `execute` and read business data from `trpc`.
+
+When the user explicitly provides a procedure, still fetch `download-procedure-schema` before `execute` unless the user says to skip schema validation.
 
 ## Safe Curl Pattern
 
@@ -69,6 +95,7 @@ curl -sS "$EMBRACE_V2_TRPC_PROXY_ENDPOINT" \
   -H "Authorization: Bearer $EMBRACE_V2_TRPC_PROXY_TOKEN" \
   -H "Content-Type: application/json" \
   --data '{
+    "action": "execute",
     "path": "core.project.query",
     "type": "query",
     "input": {
@@ -95,6 +122,7 @@ if not endpoint or not token:
     raise SystemExit("Missing EMBRACE_V2_TRPC_PROXY_ENDPOINT or EMBRACE_V2_TRPC_PROXY_TOKEN")
 
 payload = {
+    "action": "execute",
     "path": "core.project.query",
     "type": "query",
     "input": {
@@ -128,7 +156,12 @@ print(json.dumps({
 
 ## Response Contract
 
-Successful proxy responses preserve backend output under `trpc`:
+Schema discovery responses use separate fields:
+
+- `download-index` returns `ok`, `action`, `index`, `meta`, and `statusCode`.
+- `download-procedure-schema` returns `ok`, `action`, `schema`, `meta`, and `statusCode`.
+
+Successful execute responses preserve backend output under `trpc`:
 
 ```json
 {
@@ -168,6 +201,7 @@ Use this query to confirm the proxy can reach DJRDEV project data:
 
 ```json
 {
+  "action": "execute",
   "path": "core.project.query",
   "type": "query",
   "input": {
