@@ -28,6 +28,22 @@ Install globally:
 npx skills add moreton-blue-software/mb-skills --skill embrace-v2-trpc-proxy -g
 ```
 
+### Claude Code CLI
+
+For Claude Code, target the `claude-code` agent explicitly so the skill is installed under `.claude/skills/`:
+
+```bash
+npx skills add moreton-blue-software/mb-skills --skill embrace-v2-trpc-proxy -a claude-code -y --copy
+```
+
+With current `skills` CLI versions, the installation preview may mention `.agents/skills`, but the final Claude Code install path should be:
+
+```text
+./.claude/skills/embrace-v2-trpc-proxy
+```
+
+If Claude Code does not detect the skill, verify that `SKILL.md` exists at that path and restart Claude Code.
+
 ## Use Without Installing
 
 Generate a prompt for one skill:
