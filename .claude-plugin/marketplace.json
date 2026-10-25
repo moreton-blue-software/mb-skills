@@ -5,10 +5,10 @@
   },
   "plugins": [
     {
-      "name": "embrace-cli",
+      "name": "embrace-claude-mod",
       "description": "Sign in to Embrace and run authenticated tRPC queries from Claude Code",
       "version": "0.1.0",
-      "source": "./plugins/embrace-cli"
+      "source": "./plugins/embrace-claude-mod"
     }
   ],
   "metadata": {

@@ -1,0 +1,9 @@
+{
+  "name": "embrace-claude-mod",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Embrace Claude Mod login and query helper",
+  "scripts": {
+    "test": "bun test"
+  }
+}

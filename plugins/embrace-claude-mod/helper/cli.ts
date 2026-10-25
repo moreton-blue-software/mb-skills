@@ -1,6 +1,6 @@
 // Embrace CLI helper: PKCE login, authenticated tRPC calls, logout and status
 // for Embrace origins. Runs as a plain Bun process outside any agent sandbox
-// (spawned by the embrace-cli Claude Code mod, or used directly in a terminal).
+// (spawned by Embrace Claude Mod, or used directly in a terminal).
 //
 // Usage:
 //   bun helper/cli.ts login --origin https://mbdev.app.embracegrowth.ai

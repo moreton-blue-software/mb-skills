@@ -1,4 +1,4 @@
-// State contract for the embrace-cli plugin: the values it keeps in $.state.
+// State contract for Embrace Claude Mod: the values it keeps in $.state.
 
 export type EmbraceLoginPhase = 'idle' | 'awaiting-code' | 'completing' | 'signed-in' | 'error';
 
@@ -13,7 +13,7 @@ export type EmbraceLoginState = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'embrace-cli': {
+    'embrace-claude-mod': {
       login: Shaped<EmbraceLoginState>;
     };
   }

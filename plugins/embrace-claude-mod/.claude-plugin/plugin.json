@@ -1,7 +1,7 @@
 {
-  "name": "embrace-cli",
+  "name": "embrace-claude-mod",
   "version": "0.1.0",
-  "description": "Sign in to an Embrace instance (PKCE paste-code) and call tRPC queries as yourself from Claude Code",
+  "description": "Embrace Claude Mod: sign in to your Embrace instance and discover and run authenticated queries",
   "license": "UNLICENSED",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -15,7 +15,7 @@
       "type": "string",
       "title": "Helper path",
       "default": "",
-      "description": "Absolute path of the Bun helper (helper/cli.ts). Auto-detected from the workspace and ~/.claude/embrace-cli when empty"
+      "description": "Optional absolute helper path; by default uses the helper bundled with this installed plugin"
     }
   },
   "author": {

@@ -1,4 +1,6 @@
-# embrace-cli — Claude Code plugin
+# Embrace Claude Mod
+
+Moreton Blue's Embrace integration, not an Anthropic product.
 
 Sign in to an Embrace instance from Claude Code (PKCE paste-code OAuth), then call
 tRPC query procedures as yourself. Built for [core-v3#2933](https://github.com/moreton-blue-software/core-v3/issues/2933)
@@ -30,7 +32,7 @@ restriction, not a read-only OAuth scope on the access token.
 Marketplace (from this repository):
 
 ```
-/plugin install embrace-cli --marketplace moreton-blue-software/mb-skills
+/plugin install embrace-claude-mod --marketplace moreton-blue-software/mb-skills
 ```
 
 Confirm adding the marketplace when prompted, then choose an installation scope.
@@ -39,7 +41,7 @@ The public repository requires no membership in the Moreton Blue GitHub organiza
 Or from a checkout:
 
 ```
-claude --plugin-dir /path/to/mb-skills/plugins/embrace-cli
+claude --plugin-dir /path/to/mb-skills/plugins/embrace-claude-mod
 ```
 
 ## Usage
@@ -119,3 +121,10 @@ bun test                 # helper unit tests (PKCE, store, transport, flow)
 claude plugin validate .
 bunx tsc -p . --noEmit   # after loading the plugin once to generate engine types
 ```
+
+## Stable login identity
+
+The official plugin ID is `embrace-claude-mod`; `/embrace-login` is unchanged.
+The OAuth client ID remains `claude-embrace-cli` and the private local state
+directory remains `embrace-cli` so the rename does not invalidate existing logins.
+The initial release supports login and read-only queries; mutations remain deferred.

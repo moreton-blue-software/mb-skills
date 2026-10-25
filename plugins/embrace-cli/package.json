@@ -1,9 +1,0 @@
-{
-  "name": "embrace-cli-mod",
-  "private": true,
-  "version": "0.1.0",
-  "description": "Embrace CLI login helper + Claude Code mod (see README.md)",
-  "scripts": {
-    "test": "bun test"
-  }
-}

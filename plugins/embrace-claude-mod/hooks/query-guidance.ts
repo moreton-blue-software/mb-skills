@@ -4,7 +4,7 @@ export function appendQueryGuidance(
   sections: readonly PromptComposeSection[],
   pluginRoot: string,
 ): readonly PromptComposeSection[] {
-  const id = 'embrace-cli:query-guidance';
+  const id = 'embrace-claude-mod:query-guidance';
   const guide = JSON.stringify(`${pluginRoot}/QUERYING.md`);
   const helper = JSON.stringify(`${pluginRoot}/helper/cli.ts`);
   return [

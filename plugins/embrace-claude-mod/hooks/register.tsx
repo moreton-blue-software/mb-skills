@@ -1,4 +1,4 @@
-// embrace-cli Claude Code mod.
+// Embrace Claude Mod.
 //
 // /embrace-login: host picker (mbdev default, localhost dev, or any review
 //   env via free text) → runs the Bun helper outside the sandbox to mint a
@@ -23,7 +23,7 @@ const ORIGIN_STORE_KEY = 'embrace-cli:origin';
 const FALLBACK_ORIGIN = 'https://mbdev.app.embracegrowth.ai';
 const LOCAL_DEV_ORIGIN = 'http://localhost:5173';
 
-const login = atom({ plugin: 'embrace-cli', key: 'login' } as const, {
+const login = atom({ plugin: 'embrace-claude-mod', key: 'login' } as const, {
   phase: 'idle',
   origin: '',
   authorizeUrl: '',
@@ -112,7 +112,7 @@ function helperError(run: HelperRun): string {
   ).slice(0, 200);
 }
 
-const helperMissing = (howTo: string) => `embrace-cli helper not found. Set the plugin's helperPath option to helper/cli.ts (see README: ${howTo}).`;
+const helperMissing = (howTo: string) => `Embrace Claude Mod helper not found. Set the plugin's helperPath option to helper/cli.ts (see README: ${howTo}).`;
 
 // --- shared flows -------------------------------------------------------------
 
@@ -223,7 +223,7 @@ export const register: Register = (on, options) => {
     const state = await read($, login);
     return (
       <Box flexDirection="column" gap={1}>
-        <Text weight="semibold">Embrace CLI login{state.origin ? ` — ${hostOf(state.origin)}` : ''}</Text>
+        <Text weight="semibold">Embrace Claude Mod login{state.origin ? ` — ${hostOf(state.origin)}` : ''}</Text>
         {state.phase === 'awaiting-code' && (
           <Box flexDirection="column">
             <Text dimColor>1. Open this URL in any browser and sign in:</Text>
