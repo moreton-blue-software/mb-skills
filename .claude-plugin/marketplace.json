@@ -1,0 +1,17 @@
+{
+  "name": "mb-skills",
+  "owner": {
+    "name": "Moreton Blue Software"
+  },
+  "plugins": [
+    {
+      "name": "embrace-cli",
+      "description": "Sign in to Embrace and run authenticated tRPC queries from Claude Code",
+      "version": "0.1.0",
+      "source": "./plugins/embrace-cli"
+    }
+  ],
+  "metadata": {
+    "description": "Public Moreton Blue skills and Claude Code plugins"
+  }
+}

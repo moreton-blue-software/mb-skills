@@ -100,3 +100,19 @@ npx skills list
 ## Runtime Configuration
 
 Skills in this repository avoid hardcoded deployment endpoints and credentials. Configure runtime values through environment variables or your agent secret store.
+
+## Claude Code Embrace Plugin
+
+Install the login and query-only plugin from this public repository:
+
+```text
+/plugin install embrace-cli --marketplace moreton-blue-software/mb-skills
+```
+
+Confirm adding the marketplace and select an installation scope. Run
+`/embrace-login https://<your-embrace-instance>` to sign in through your browser.
+The helper keeps credentials outside the mod sandbox and sends only GET tRPC queries.
+Bun and a Claude Code build with hooks-module support are required.
+See [plugin setup and security notes](plugins/embrace-cli/README.md).
+
+This plugin install is separate from the existing `npx skills add` flow above.
