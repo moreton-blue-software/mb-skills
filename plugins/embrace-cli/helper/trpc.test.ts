@@ -45,6 +45,22 @@ describe('assertProcedureName', () => {
 });
 
 describe('callProcedure', () => {
+  test('accepts future query names and passes their input without a module allowlist', async () => {
+    const captured = stubCapture(() => Response.json({ result: { data: { json: { items: [] } } } }));
+    const result = await callProcedure({
+      origin: ORIGIN,
+      procedure: 'v3.futureModule.searchNewRecords',
+      input: { filter: { label: 'new contract' }, pageSize: 5 },
+      accessToken: 'ACCESS-1',
+    });
+    const request = captured[0]!;
+    const url = new URL(request.url);
+    expect(url.pathname).toBe('/trpc/v3.futureModule.searchNewRecords');
+    expect(JSON.parse(url.searchParams.get('input')!)).toEqual({ json: { filter: { label: 'new contract' }, pageSize: 5 } });
+    expect(request.method).toBe('GET');
+    expect(request.body).toBe('');
+    expect(result.data).toEqual({ items: [] });
+  });
   test('never retries a mutation with POST when GET is rejected', async () => {
     const captured = stubCapture(() => Response.json({ error: { json: { data: { code: 'METHOD_NOT_SUPPORTED' } } } }, { status: 405 }));
     const result = await callProcedure({ origin: ORIGIN, procedure: 'v3.agent.approveThread', input: { threadId: 't1' }, accessToken: 'A' });

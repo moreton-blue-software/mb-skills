@@ -12,6 +12,7 @@
 
 import { atom, read, update } from 'claude-code';
 import type { EngineInterface, PluginOptions, Register } from 'claude-code';
+import { appendQueryGuidance } from './query-guidance';
 
 import type {
   EmbraceLoginState,
@@ -182,6 +183,11 @@ async function refreshStatusLine($: EngineInterface, options: PluginOptions): Pr
 }
 
 export const register: Register = (on, options) => {
+  on('prompt.compose', async ($, e, next) => {
+    const result = await next(e);
+    return { ...result, sections: appendQueryGuidance(result.sections, $.plugin.root) };
+  });
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'embrace-login',

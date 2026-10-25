@@ -63,6 +63,35 @@ secret — public client); you open it in any browser, sign in, and the finish
 page shows a one-time code you paste back. The helper exchanges it and stores
 tokens in a 0600 file under `${XDG_STATE_HOME:-~/.local/state}/embrace-cli/`.
 
+## Agent instructions for CRM, Projects, and other records
+
+The plugin adds a short instruction section to Claude's session prompt pointing
+to the installed [query guide](QUERYING.md) and helper. Claude must read the guide
+before a business query: choose the intended signed-in instance, obtain a verified
+query/input contract, use bounded filters and pagination, and interpret denial,
+validation errors, and partial results honestly. It must never read stored tokens
+or switch identities to work around RBAC.
+
+This is instruction-guided helper use, not a model-callable query tool. Claude
+invokes the helper through its normal command tool, subject to that session's
+permissions. No business query name, filter shape, or record ID should be guessed.
+
+### New and future procedures
+
+The helper already accepts any valid `v3.*` name and uses the same GET-only
+transport; new query procedures do not require adding a plugin allowlist.
+**Automatic discovery is not implemented in current Core**: it has an
+operator-side router-to-JSON-Schema exporter, but no customer-readable procedure
+catalogue endpoint. Until one is deployed, the operator must supply a trusted
+contract matching the instance/version. Without it, Claude reports the missing
+contract rather than guessing. Customers do not need private GitHub access.
+
+Future automatic support should consume a Core-owned authenticated query index
+and per-query schemas derived from that deployment's executable router. Index →
+select → inspect schema → execute keeps procedure semantics in Core, not copied
+into this plugin. This backend discovery requirement is separate from the current
+login/query transport and is not claimed delivered by these instructions.
+
 ## Security notes
 
 - Token custody stays in the helper and its 0600 state file; the plugin module
