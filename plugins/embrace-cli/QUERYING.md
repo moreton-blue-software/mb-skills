@@ -44,17 +44,43 @@ You need all of:
   version of the chosen instance, not another tenant, a v2 API, or an old example.
 - Enough documented response semantics to interpret results and pagination.
 
-Use an authenticated provider-supported discovery index and per-procedure schema
-**only if that instance actually documents and implements them**. Fetch only the
-needed module/contracts; metadata is not authorization to execute a query.
+Use the authenticated discovery commands on instances with the discovery API:
 
-**Current limitation:** the inspected Core implementation has no customer-facing
-procedure/index/schema discovery endpoint. Do not invent `discover`,
-`download-index`, `getSchema`, or OpenAPI routes, or call random procedures to
-infer input from error messages. Until a supported catalogue exists, use a
-trusted contract supplied by the Embrace operator for the matching deployment.
-If it is missing, explain the missing contract and ask for it. Do not require the
-customer to access Moreton Blue's private GitHub repositories.
+```text
+bun <absolute-helper-path> discover --origin <origin> --search project --limit 20
+bun <absolute-helper-path> describe --origin <origin> <name-from-discovery>
+```
+
+`discover` calls `v3.discovery.listQueries`; `describe` calls
+`v3.discovery.describeQuery`. Both are GET-only tRPC queries using the user's
+stored identity. Search procedure names (for example `crm.company`,
+`crm.contact`, or `project`); no server call chooses the business query for you.
+The index returns `queries`, `nextAfter`, and `deployment`. Page only when
+necessary with `--after <nextAfter>`, retaining the same search and limit.
+There are no hidden-result counts and no implied permission to access data.
+
+`describe` returns `name`, `type`, `deployment`, `input`, and `output`:
+- `input.status: none`: omit JSON input.
+- `input.status: supported`: use its `presence` (`required`/`optional`) and
+  structural JSON `schema`. Read any `limitations`; refinements/transforms can
+  impose additional runtime checks.
+- `input.status: unsupported`: stop with the fixed reason; do not invent `{}`.
+- `output` describes structural response shape when supported, or explicitly
+  says `none`/`unsupported`. Do not infer pagination termination from an unknown
+  output contract or invent undocumented field meanings.
+
+Compare `deployment.commitSha` and `deployedAt` between list and detail. If they
+change mid-flow, repeat discovery before executing. `unknown` is not proof of a
+version match; disclose that limitation and don't persist/reuse the contract.
+The helper keeps no persistent metadata cache. Core filters metadata through
+canonical admission and omits input-dependent dataset, public and service APIs;
+a query absent from the catalogue is not a reason to probe hidden names.
+
+**Older-instance limitation:** not every deployed Core version includes this API.
+If the server reports discovery unavailable or `NOT_FOUND`, explain the missing
+capability and ask the operator to deploy it or provide a trusted contract for
+that deployment. Never invent another discovery endpoint or infer inputs from
+repeated validation errors. Customers do not need private GitHub access.
 
 Core operators can generate structural input contracts from the executable router
 using `pnpm trpc:export-contracts -- --procedure <name> --output-dir <directory>`.
@@ -129,17 +155,14 @@ do not retry with POST or broaden the query to avoid the input filter.
 
 ## Future procedure support
 
-Generic execution already supports new query names without a plugin release.
-Automatic **discovery** is separate and is not available merely because tRPC
-accepts requests. The sustainable provider contract is an authenticated
-query-only index plus per-query input schemas derived from the deployed router,
-with instance/deployment provenance and explicit unsupported-schema errors.
-Core owns those semantics; the public plugin consumes them rather than copying
-schemas or private backend source.
+Generic execution supports new query names without a plugin release. On
+Core versions with this discovery API, the query-only index and per-query schemas
+come from the deployed router. New registered queries become discoverable after
+that instance deploys them, subject to authorization and schema support. Core
+owns API meaning; the plugin never copies a private router or procedure list.
 
-When that capability is implemented, follow index → select query → read its
-contract → build bounded input → execute. Cache metadata only by origin and
-matched deployment version, refresh it after version changes or missing/invalid
-contract errors, and retain the same no-mutations and no-guessed-schema rules.
-New registered queries then become discoverable when Core deploys/publishes their
-contracts, rather than requiring a new static list in this plugin.
+Always follow index → select query → read its contract → build bounded input →
+execute. Refresh after deployment changes or missing/invalid contracts, retaining
+no-mutations and no-guessed-schema rules. New input-dependent permission modes or
+unsupported schema kinds may require a Core discovery update; automatic naming
+discovery does not make every future parser representable or grant new access.

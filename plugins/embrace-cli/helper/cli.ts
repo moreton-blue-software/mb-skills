@@ -8,6 +8,8 @@
 //     then exchanges and stores tokens. --url-only prints
 //     {"authorizeUrl","state"} and exits (mod flow step 1). --complete reads
 //     the pasted code from stdin non-interactively (mod flow step 2).
+//   bun helper/cli.ts discover --origin <url> --search project --limit 20
+//   bun helper/cli.ts describe --origin <url> v3.project.getProjects
 //   bun helper/cli.ts call --origin <url> v3.agent.listThreads
 //   bun helper/cli.ts call --origin <url> v3.agent.getThread '{"threadId":"..."}'
 //   bun helper/cli.ts logout --origin <url> [--force]
@@ -43,6 +45,7 @@ import {
   type TokenStore,
 } from './token-store';
 import { callProcedure } from './trpc';
+import { discoveryRequest, LIST_QUERIES, DESCRIBE_QUERY } from './discovery';
 
 export { setFetchForTests };
 
@@ -68,7 +71,7 @@ export class CliError extends Error {
 }
 
 export interface CliArgs {
-  command: 'login' | 'call' | 'logout' | 'status';
+  command: 'login' | 'call' | 'logout' | 'status' | 'discover' | 'describe';
   origin?: string;
   procedure?: string;
   inputJson?: string;
@@ -81,7 +84,7 @@ export interface CliArgs {
 /** Parse and validate argv (excluding argv[0]/argv[1]). Pure; tested. */
 export function parseCliArgs(argv: readonly string[]): CliArgs {
   const [command, ...rest] = argv;
-  if (!command) throw new CliError('missing subcommand (login, call, logout or status)');
+  if (!command) throw new CliError('missing subcommand (login, discover, describe, call, logout or status)');
   try {
     if (command === 'login') {
       const { values } = parseArgs({
@@ -99,6 +102,28 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
         urlOnly: Boolean(values['url-only']),
         complete: Boolean(values.complete),
       };
+    }
+    if (command === 'discover' || command === 'describe') {
+      const { values, positionals } = parseArgs({
+        args: rest,
+        options: command === 'discover'
+          ? { origin: { type: 'string' }, search: { type: 'string' }, limit: { type: 'string' }, after: { type: 'string' } }
+          : { origin: { type: 'string' } },
+        allowPositionals: true,
+      });
+      if (typeof values.origin !== 'string' || !values.origin) throw new CliError(`${command} requires --origin <url>`);
+      if ((command === 'discover' && positionals.length !== 0)
+        || (command === 'describe' && positionals.length !== 1)) {
+        throw new CliError(command === 'discover' ? 'discover takes options only' : 'describe requires one query name');
+      }
+      const request = discoveryRequest({
+        command,
+        name: positionals[0],
+        search: typeof values.search === 'string' ? values.search : undefined,
+        limit: typeof values.limit === 'string' ? Number(values.limit) : undefined,
+        after: typeof values.after === 'string' ? values.after : undefined,
+      });
+      return { command, origin: values.origin, ...request };
     }
     if (command === 'call') {
       const { values, positionals } = parseArgs({
@@ -162,6 +187,8 @@ export async function runCommand(args: CliArgs, context: CliContext = {}): Promi
       case 'login':
         return await loginFlow(origin!, args, { tokenStore, pendingStore, now, print, fail, context });
       case 'call':
+      case 'discover':
+      case 'describe':
         return await callFlow(origin!, args, { tokenStore, now, print, fail });
       case 'logout':
         return await logoutFlow(origin!, args, { tokenStore, print, fail });
@@ -247,6 +274,9 @@ async function callFlow(origin: string, args: CliArgs, flow: FlowContext): Promi
     flow.fail({
       error: `procedure ${args.procedure} failed (${result.errorCode ?? result.httpStatus})`,
       ...(result.errorCode === 'UNAUTHORIZED' ? { hint: 'try signing in again' } : {}),
+      ...(result.errorCode === 'NOT_FOUND' && [LIST_QUERIES, DESCRIBE_QUERY].includes(args.procedure!)
+        ? { hint: 'Discovery or this query contract is unavailable on this deployment; check the instance/version with its operator. Do not guess API names or input schemas.' }
+        : {}),
     });
     return 1;
   }

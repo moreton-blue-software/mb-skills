@@ -80,17 +80,26 @@ permissions. No business query name, filter shape, or record ID should be guesse
 
 The helper already accepts any valid `v3.*` name and uses the same GET-only
 transport; new query procedures do not require adding a plugin allowlist.
-**Automatic discovery is not implemented in current Core**: it has an
-operator-side router-to-JSON-Schema exporter, but no customer-readable procedure
-catalogue endpoint. Until one is deployed, the operator must supply a trusted
-contract matching the instance/version. Without it, Claude reports the missing
-contract rather than guessing. Customers do not need private GitHub access.
+On Core versions supporting discovery, use:
 
-Future automatic support should consume a Core-owned authenticated query index
-and per-query schemas derived from that deployment's executable router. Index →
-select → inspect schema → execute keeps procedure semantics in Core, not copied
-into this plugin. This backend discovery requirement is separate from the current
-login/query transport and is not claimed delivered by these instructions.
+```text
+bun helper/cli.ts discover --origin <url> --search crm.company --limit 20
+bun helper/cli.ts describe --origin <url> <returned-query-name>
+bun helper/cli.ts call --origin <url> <verified-query-name> '<input-json>'
+```
+
+These commands use authenticated `v3.discovery.listQueries` and
+`v3.discovery.describeQuery` queries. Responses include deployment provenance;
+inspect supported input/output structural contracts before execution. Discovery
+is permission-filtered and excludes mutations and input-dependent/public/service
+APIs. Unsupported schema statuses are explicit, never empty permissive fallbacks.
+The helper stores no persistent schema cache and does not fetch all metadata
+implicitly. See [the query guide](QUERYING.md) for pagination and version handling.
+
+New authorized query names and parser contracts come from the instance's deployed
+router, without another plugin release. Older Core versions may not implement
+discovery: report that requirement and request a matching operator-supplied
+contract instead of guessing. Customers need no private GitHub access.
 
 ## Security notes
 
