@@ -118,16 +118,17 @@ Core decides the reviewed operation inventory and preserves normal user RBAC.
 ```text
 bun helper/cli.ts discover --type mutation --origin <url> --search company --limit 20
 bun helper/cli.ts describe --type mutation --origin <url> <returned-name>
-bun helper/cli.ts mutate --origin <url> --request-id <uuid> <described-name> '<input-json>'
+bun helper/cli.ts mutate --origin <url> <described-name> '<input-json>'
 ```
 
-Use one recorded UUID for the exact logical write. The helper fetches a fresh
-contract, requires supported schemas and known deployment provenance, and POSTs
-only the fixed Core execution gateway. It never POSTs directly to the business
-procedure. No automatic write retry exists; uncertain/unresolved outcomes retain
-the request ID and must be reconciled before another attempt. A new request ID is
-not a safe way to retry a lost response. No exactly-once external-side-effect
-promise is made. Query discovery defaults and `call` remain unchanged.
+The helper fetches a fresh contract, requires supported schemas and known
+deployment provenance, and POSTs only `{name,input?}` to the fixed Core execution
+gateway. It returns the actual procedure result, without request IDs, stored
+receipts or replay state. It never POSTs directly to the business procedure.
+There is no automatic write retry or server-side duplicate-submission protection;
+submitting the same write twice can execute it twice. After an uncertain response,
+check the existing record before another attempt. Query discovery defaults and
+`call` remain unchanged.
 
 ## Security notes
 

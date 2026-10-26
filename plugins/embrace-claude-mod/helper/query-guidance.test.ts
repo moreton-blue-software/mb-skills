@@ -21,9 +21,10 @@ describe('installed query instructions', () => {
     const writes = await Bun.file(new URL('../MUTATING.md', import.meta.url)).text();
     expect(text).toContain('discover/describe --type mutation');
     expect(text).toContain('v3.discovery.executeMutation');
-    expect(text).toContain('--request-id <uuid>');
+    expect(text).not.toContain('--request-id');
     expect(text).toContain('no additional Mod approval gate');
-    expect(text).toContain('never automatically retry POST');
+    expect(text).toContain('Never automatically retry POST');
+    expect(text).toContain('duplicate submissions can execute twice');
     expect(writes).toContain('Hard-delete, soft-delete, uploaded-file deletion');
     expect(writes).toContain('not a client name blacklist');
     expect(writes).toContain('Do not automatically retry');

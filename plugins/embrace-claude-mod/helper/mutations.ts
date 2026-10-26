@@ -1,18 +1,12 @@
 // Execute reviewed non-delete mutations through Core's fixed gateway only.
-// Usage: cli.ts mutate --origin <url> --request-id <uuid> <name> [input-json].
+// Usage: cli.ts mutate --origin <url> <name> [input-json].
 import { DESCRIBE_MUTATION, EXECUTE_MUTATION } from './discovery';
 import { httpFetch } from './fetch';
 import { assertProcedureName, callProcedure } from './trpc';
 import { deserializeEnvelope, serializeInput } from './superjson-lite';
 
-interface Deployment {
-  commitSha: string;
-  deployedAt: string;
-}
-
 interface MutationError {
   error: string;
-  requestId: string;
   outcome: 'not-dispatched' | 'unknown';
   hint?: string;
 }
@@ -20,19 +14,6 @@ interface MutationError {
 type MutationResult = { ok: true; data: unknown } | { ok: false; error: MutationError };
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
-
-export function assertRequestId(value: unknown): asserts value is string {
-  if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
-    throw new Error('mutate requires --request-id <uuid>; retain the same ID for this exact logical write');
-  }
-}
-
-function deploymentOf(value: unknown): Deployment | null {
-  if (!record(value) || typeof value.commitSha !== 'string' || !/^[0-9a-f]{40}$/i.test(value.commitSha)
-    || typeof value.deployedAt !== 'string' || value.deployedAt === 'unknown'
-    || !Number.isFinite(Date.parse(value.deployedAt))) return null;
-  return { commitSha: value.commitSha, deployedAt: value.deployedAt };
-}
 
 function supportedContract(value: unknown, direction: 'input' | 'output'): boolean {
   if (!record(value)) return false;
@@ -45,18 +26,14 @@ function supportedContract(value: unknown, direction: 'input' | 'output'): boole
 export async function executeReviewedMutation(args: {
   origin: string;
   procedure: string;
-  requestId: string;
   input?: unknown;
   accessToken: string;
 }): Promise<MutationResult> {
-  assertRequestId(args.requestId);
   assertProcedureName(args.procedure);
-  const rejected = (error: string): MutationResult => ({ ok: false, error: {
-    error, requestId: args.requestId, outcome: 'not-dispatched',
-  } });
+  const rejected = (error: string): MutationResult => ({ ok: false, error: { error, outcome: 'not-dispatched' } });
   const uncertain = (error: string): MutationResult => ({ ok: false, error: {
-    error, requestId: args.requestId, outcome: 'unknown',
-    hint: 'Do not send a new request ID or blindly retry. Reconcile this exact request ID and payload; the write may already have succeeded.',
+    error, outcome: 'unknown',
+    hint: 'Do not automatically retry. Check the record state before another attempt; the write may already have succeeded and duplicate submissions can execute twice.',
   } });
 
   let described;
@@ -71,8 +48,11 @@ export async function executeReviewedMutation(args: {
   if (!record(metadata) || metadata.name !== args.procedure || metadata.type !== 'mutation') {
     return rejected('Mutation contract is malformed or does not match the requested operation');
   }
-  const deployment = deploymentOf(metadata.deployment);
-  if (!deployment) return rejected('Mutation contract has no verified deployment provenance');
+  const deployment = metadata.deployment;
+  if (!record(deployment) || typeof deployment.commitSha !== 'string' || !/^[0-9a-f]{40}$/i.test(deployment.commitSha)
+    || typeof deployment.deployedAt !== 'string' || !Number.isFinite(Date.parse(deployment.deployedAt))) {
+    return rejected('Mutation contract has no verified deployment provenance');
+  }
   if (!supportedContract(metadata.input, 'input') || !supportedContract(metadata.output, 'output')) {
     return rejected('Mutation input or output contract is unsupported; no mutation was dispatched');
   }
@@ -84,18 +64,16 @@ export async function executeReviewedMutation(args: {
     return rejected('Mutation contract requires input; supply the documented JSON argument');
   }
 
-  // Omitted input must stay omitted, not become null or an undefined child that
-  // the deliberately plain-JSON request serializer cannot encode.
+  // Omitted input stays omitted, rather than becoming a null input.
   let body: string;
   try {
     body = JSON.stringify(serializeInput({ name: args.procedure,
-      ...(args.input === undefined ? {} : { input: args.input }),
-      requestId: args.requestId, expectedDeployment: deployment }));
+      ...(args.input === undefined ? {} : { input: args.input }) }));
   } catch {
     return rejected('Mutation input must be plain JSON; no mutation was dispatched');
   }
   // The named business mutation is never sent directly. Core rechecks eligibility,
-  // current permissions, deployment provenance and the request's replay identity.
+  // permissions and actual input validation; no request bookkeeping or retries.
   try {
     const response = await httpFetch(`${args.origin}/trpc/${EXECUTE_MUTATION}`, {
       method: 'POST',
@@ -113,23 +91,10 @@ export async function executeReviewedMutation(args: {
       const code = typeof error === 'string' && /^[A-Z_]{1,64}$/.test(error) ? error : `HTTP_${response.status}`;
       return uncertain(`Mutation gateway did not report success (${code})`);
     }
-    const result = record(payload.result) ? deserializeEnvelope(payload.result.data) : undefined;
-    if (!record(result) || result.name !== args.procedure || result.requestId !== args.requestId
-      || typeof result.replayed !== 'boolean') {
-      return uncertain('Mutation gateway receipt does not match this request');
+    if (!record(payload.result) || !record(payload.result.data) || !Object.hasOwn(payload.result.data, 'json')) {
+      return uncertain('Mutation gateway returned a malformed result envelope');
     }
-    if (result.status === 'unresolved' && result.replayed === true) {
-      return uncertain('Mutation outcome is unresolved; do not redispatch with a new request ID');
-    }
-    if (result.status !== 'succeeded' || !Object.hasOwn(result, 'data')) {
-      return uncertain('Mutation gateway did not return a supported outcome with result data');
-    }
-    const executedDeployment = deploymentOf(result.deployment);
-    if (!executedDeployment || executedDeployment.commitSha !== deployment.commitSha
-      || executedDeployment.deployedAt !== deployment.deployedAt) {
-      return uncertain('Mutation gateway receipt has different deployment provenance');
-    }
-    return { ok: true, data: result };
+    return { ok: true, data: deserializeEnvelope(payload.result.data) };
   } catch {
     return uncertain('Mutation gateway connection failed after dispatch');
   }
