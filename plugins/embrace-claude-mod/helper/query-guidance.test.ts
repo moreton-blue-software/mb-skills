@@ -12,7 +12,23 @@ describe('installed query instructions', () => {
     expect(result[1]?.scope).toBe('session');
     expect(result[1]?.text).toContain(JSON.stringify(`${root}/QUERYING.md`));
     expect(result[1]?.text).toContain(JSON.stringify(`${root}/helper/cli.ts`));
+    expect(result[1]?.text).toContain(JSON.stringify(`${root}/MUTATING.md`));
     expect(sections).toHaveLength(1);
+  });
+
+  test('writes use a distinct reviewed gateway without extra approvals or retry loopholes', async () => {
+    const text = appendQueryGuidance([], '/plugin')[0]!.text;
+    const writes = await Bun.file(new URL('../MUTATING.md', import.meta.url)).text();
+    expect(text).toContain('discover/describe --type mutation');
+    expect(text).toContain('v3.discovery.executeMutation');
+    expect(text).toContain('--request-id <uuid>');
+    expect(text).toContain('no additional Mod approval gate');
+    expect(text).toContain('never automatically retry POST');
+    expect(writes).toContain('Hard-delete, soft-delete, uploaded-file deletion');
+    expect(writes).toContain('not a client name blacklist');
+    expect(writes).toContain('Do not automatically retry');
+    expect(writes).toContain('separately scoped');
+    expect(guide).toContain('MUTATING.md');
   });
 
   test('replaces its own section instead of duplicating instructions', () => {

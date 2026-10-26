@@ -3,7 +3,7 @@
 Moreton Blue's Embrace integration, not an Anthropic product.
 
 Sign in to an Embrace instance from Claude Code (PKCE paste-code OAuth), then call
-tRPC query procedures as yourself. Built for [core-v3#2933](https://github.com/moreton-blue-software/core-v3/issues/2933)
+tRPC queries and supported non-delete mutations as yourself. Built for [core-v3#2933](https://github.com/moreton-blue-software/core-v3/issues/2933)
 (requires the core-v3 OIDC bearer branch deployed on the target instance).
 
 Two pieces:
@@ -15,10 +15,15 @@ Two pieces:
   (origin picker → authorize URL → paste the one-time code) and a signed-in
   status line. tRPC queries run through the helper's `call` command.
 
-Scope: **login + query procedures only**. Mutations (e.g. agent thread
-approve/reject) are deferred to [the separate follow-up](https://github.com/moreton-blue-software/mb-agents/issues/269); the helper sends only GET requests for tRPC calls and never falls back to POST.
-The server rejects mutation procedures requested over GET. This is a client
-restriction, not a read-only OAuth scope on the access token.
+Scope: **login + queries + reviewed non-delete mutations** on compatible Core
+instances. See [the mutation follow-up](https://github.com/moreton-blue-software/mb-agents/issues/269).
+The current public release remains 0.1.0/read-only until this candidate is released;
+this branch does not publish or bump that version. The helper keeps `call` GET-only
+and uses a separate fixed gateway for explicit `mutate` commands. There is no
+additional Mod approval gate. Hard/soft deletes, file deletion and mixed
+business-record deletion are unsupported; unreviewed mutations remain unavailable.
+The server rejects mutation procedures requested over GET. These helper/gateway
+boundaries are not a globally read-only or non-delete OAuth token scope.
 
 ## Requirements
 
@@ -68,7 +73,7 @@ tokens in a 0600 file under `${XDG_STATE_HOME:-~/.local/state}/embrace-cli/`.
 ## Agent instructions for CRM, Projects, and other records
 
 The plugin adds a short instruction section to Claude's session prompt pointing
-to the installed [query guide](QUERYING.md) and helper. Claude must read the guide
+to the installed [query guide](QUERYING.md), [write guide](MUTATING.md) and helper. Claude must read the query guide
 before a business query: choose the intended signed-in instance, obtain a verified
 query/input contract, use bounded filters and pagination, and interpret denial,
 validation errors, and partial results honestly. It must never read stored tokens
@@ -103,6 +108,27 @@ router, without another plugin release. Older Core versions may not implement
 discovery: report that requirement and request a matching operator-supplied
 contract instead of guessing. Customers need no private GitHub access.
 
+## Supported writes
+
+Read [MUTATING.md](MUTATING.md) before a requested record change. A compatible
+Core deployment must expose `v3.discovery.listMutations`, `describeMutation` and
+`executeMutation`; older instances retain queries but cannot use this write lane.
+Core decides the reviewed operation inventory and preserves normal user RBAC.
+
+```text
+bun helper/cli.ts discover --type mutation --origin <url> --search company --limit 20
+bun helper/cli.ts describe --type mutation --origin <url> <returned-name>
+bun helper/cli.ts mutate --origin <url> --request-id <uuid> <described-name> '<input-json>'
+```
+
+Use one recorded UUID for the exact logical write. The helper fetches a fresh
+contract, requires supported schemas and known deployment provenance, and POSTs
+only the fixed Core execution gateway. It never POSTs directly to the business
+procedure. No automatic write retry exists; uncertain/unresolved outcomes retain
+the request ID and must be reconciled before another attempt. A new request ID is
+not a safe way to retry a lost response. No exactly-once external-side-effect
+promise is made. Query discovery defaults and `call` remain unchanged.
+
 ## Security notes
 
 - Token custody stays in the helper and its 0600 state file; the plugin module
@@ -127,4 +153,5 @@ bunx tsc -p . --noEmit   # after loading the plugin once to generate engine type
 The official plugin ID is `embrace-claude-mod`; `/embrace-login` is unchanged.
 The OAuth client ID remains `claude-embrace-cli` and the private local state
 directory remains `embrace-cli` so the rename does not invalidate existing logins.
-The initial release supports login and read-only queries; mutations remain deferred.
+The initial public release supports login and read-only queries. This candidate
+adds reviewed non-delete writes without changing the stable login identity.

@@ -3,7 +3,9 @@
 Use this guide for requests to search, list, count, or inspect records in an
 Embrace instance, including CRM, contacts, companies, projects, and other modules.
 This plugin provides login and query transport, not a private-source checkout or
-an automatically discovered procedure catalogue.
+an automatically discovered procedure catalogue. This guide is for queries only;
+for user-requested writes read [MUTATING.md](MUTATING.md). Do not convert a query
+failure into a write or add POST fallback to `call`.
 
 ## 1. Select the instance and identity
 
@@ -127,9 +129,11 @@ bun <absolute-helper-path> call --origin <origin> <verified-query-name> '<input-
 
 Omit the final argument for a contract with void input. Supply ordinary JSON for
 object input; the helper handles superjson, Bearer authentication and refresh.
-Every tRPC call uses GET with an encoded input envelope. Never use POST, a
-mutation, subscription, approval action, or a direct HTTP fallback. Authentication
-itself still needs OAuth token/refresh/revoke POST requests, handled by the helper.
+Every `call` query uses GET with an encoded input envelope. Never use POST, a
+mutation, subscription, approval action, or a direct HTTP fallback for a query.
+Explicit user-requested writes use the separate reviewed gateway described in
+[MUTATING.md](MUTATING.md), never query fallback. Authentication itself still needs
+OAuth token/refresh/revoke POST requests, handled by the helper.
 
 The helper accepts any syntactically valid v3 query name; it has no module
 allowlist. GET-only is a client safety restriction, not a server-enforced
@@ -163,6 +167,6 @@ owns API meaning; the plugin never copies a private router or procedure list.
 
 Always follow index → select query → read its contract → build bounded input →
 execute. Refresh after deployment changes or missing/invalid contracts, retaining
-no-mutations and no-guessed-schema rules. New input-dependent permission modes or
+query-only transport and no-guessed-schema rules. New input-dependent permission modes or
 unsupported schema kinds may require a Core discovery update; automatic naming
 discovery does not make every future parser representable or grant new access.

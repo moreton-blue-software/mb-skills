@@ -12,6 +12,9 @@
 //   bun helper/cli.ts describe --origin <url> v3.project.getProjects
 //   bun helper/cli.ts call --origin <url> v3.agent.listThreads
 //   bun helper/cli.ts call --origin <url> v3.agent.getThread '{"threadId":"..."}'
+//   bun helper/cli.ts discover --type mutation --origin <url> --search company
+//   bun helper/cli.ts describe --type mutation --origin <url> <name>
+//   bun helper/cli.ts mutate --origin <url> --request-id <uuid> <name> [input-json]
 //   bun helper/cli.ts logout --origin <url> [--force]
 //   bun helper/cli.ts status [--origin <url>] [--json]
 //
@@ -45,7 +48,8 @@ import {
   type TokenStore,
 } from './token-store';
 import { callProcedure } from './trpc';
-import { discoveryRequest, LIST_QUERIES, DESCRIBE_QUERY } from './discovery';
+import { discoveryRequest, LIST_QUERIES, DESCRIBE_QUERY, LIST_MUTATIONS, DESCRIBE_MUTATION, type OperationType } from './discovery';
+import { executeReviewedMutation, assertRequestId } from './mutations';
 
 export { setFetchForTests };
 
@@ -71,7 +75,9 @@ export class CliError extends Error {
 }
 
 export interface CliArgs {
-  command: 'login' | 'call' | 'logout' | 'status' | 'discover' | 'describe';
+  command: 'login' | 'call' | 'mutate' | 'logout' | 'status' | 'discover' | 'describe';
+  operationType?: OperationType;
+  requestId?: string;
   origin?: string;
   procedure?: string;
   inputJson?: string;
@@ -84,7 +90,7 @@ export interface CliArgs {
 /** Parse and validate argv (excluding argv[0]/argv[1]). Pure; tested. */
 export function parseCliArgs(argv: readonly string[]): CliArgs {
   const [command, ...rest] = argv;
-  if (!command) throw new CliError('missing subcommand (login, discover, describe, call, logout or status)');
+  if (!command) throw new CliError('missing subcommand (login, discover, describe, call, mutate, logout or status)');
   try {
     if (command === 'login') {
       const { values } = parseArgs({
@@ -107,8 +113,8 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
       const { values, positionals } = parseArgs({
         args: rest,
         options: command === 'discover'
-          ? { origin: { type: 'string' }, search: { type: 'string' }, limit: { type: 'string' }, after: { type: 'string' } }
-          : { origin: { type: 'string' } },
+          ? { origin: { type: 'string' }, type: { type: 'string' }, search: { type: 'string' }, limit: { type: 'string' }, after: { type: 'string' } }
+          : { origin: { type: 'string' }, type: { type: 'string' } },
         allowPositionals: true,
       });
       if (typeof values.origin !== 'string' || !values.origin) throw new CliError(`${command} requires --origin <url>`);
@@ -116,26 +122,37 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
         || (command === 'describe' && positionals.length !== 1)) {
         throw new CliError(command === 'discover' ? 'discover takes options only' : 'describe requires one query name');
       }
+      if (values.type !== undefined && values.type !== 'query' && values.type !== 'mutation') {
+        throw new CliError('--type must be query or mutation');
+      }
+      const operationType = values.type ?? 'query';
       const request = discoveryRequest({
         command,
+        type: operationType,
         name: positionals[0],
         search: typeof values.search === 'string' ? values.search : undefined,
         limit: typeof values.limit === 'string' ? Number(values.limit) : undefined,
         after: typeof values.after === 'string' ? values.after : undefined,
       });
-      return { command, origin: values.origin, ...request };
+      return { command, origin: values.origin, operationType, ...request };
     }
-    if (command === 'call') {
+    if (command === 'call' || command === 'mutate') {
       const { values, positionals } = parseArgs({
         args: rest,
-        options: { origin: { type: 'string' } },
+        options: command === 'mutate'
+          ? { origin: { type: 'string' }, 'request-id': { type: 'string' } }
+          : { origin: { type: 'string' } },
         allowPositionals: true,
       });
-      if (!values.origin) throw new CliError('call requires --origin <url>');
+      if (typeof values.origin !== 'string' || !values.origin) throw new CliError(`${command} requires --origin <url>`);
       const [procedure, inputJson] = positionals;
-      if (!procedure) throw new CliError('call requires a procedure (e.g. v3.agent.listThreads)');
-      if (positionals.length > 2) throw new CliError('call takes at most two positionals: <procedure> [json]');
+      if (!procedure) throw new CliError(`${command} requires a procedure (e.g. v3.crm.company.createCompany)`);
+      if (positionals.length > 2) throw new CliError(`${command} takes at most two positionals: <procedure> [json]`);
       if (inputJson !== undefined) JSON.parse(inputJson);
+      if (command === 'mutate') {
+        assertRequestId(values['request-id']);
+        return { command, origin: values.origin, procedure, inputJson, requestId: values['request-id'] };
+      }
       return { command, origin: values.origin, procedure, inputJson };
     }
     if (command === 'logout') {
@@ -187,11 +204,12 @@ export async function runCommand(args: CliArgs, context: CliContext = {}): Promi
       case 'login':
         return await loginFlow(origin!, args, { tokenStore, pendingStore, now, print, fail, context });
       case 'call':
+      case 'mutate':
       case 'discover':
       case 'describe':
         return await callFlow(origin!, args, { tokenStore, now, print, fail });
       case 'logout':
-        return await logoutFlow(origin!, args, { tokenStore, print, fail });
+        return await logoutFlow(origin!, args, { tokenStore, now, print, fail });
       case 'status':
         return await statusFlow(origin, args, { tokenStore, now, print, fail });
     }
@@ -269,12 +287,21 @@ async function callFlow(origin: string, args: CliArgs, flow: FlowContext): Promi
     accessToken = await refreshStoredToken(stored, flow);
   }
   const input = args.inputJson === undefined ? undefined : (JSON.parse(args.inputJson) as unknown);
+  if (args.command === 'mutate') {
+    const result = await executeReviewedMutation({ origin, procedure: args.procedure!, input, accessToken, requestId: args.requestId! });
+    if (!result.ok) {
+      flow.fail(result.error);
+      return 1;
+    }
+    flow.print(result.data);
+    return 0;
+  }
   const result = await callProcedure({ origin, procedure: args.procedure!, input, accessToken });
   if (!result.ok) {
     flow.fail({
       error: `procedure ${args.procedure} failed (${result.errorCode ?? result.httpStatus})`,
       ...(result.errorCode === 'UNAUTHORIZED' ? { hint: 'try signing in again' } : {}),
-      ...(result.errorCode === 'NOT_FOUND' && [LIST_QUERIES, DESCRIBE_QUERY].includes(args.procedure!)
+      ...(result.errorCode === 'NOT_FOUND' && [LIST_QUERIES, DESCRIBE_QUERY, LIST_MUTATIONS, DESCRIBE_MUTATION].includes(args.procedure!)
         ? { hint: 'Discovery or this query contract is unavailable on this deployment; check the instance/version with its operator. Do not guess API names or input schemas.' }
         : {}),
     });
@@ -330,7 +357,7 @@ async function statusFlow(origin: string | undefined, args: CliArgs, flow: FlowC
   const sessions = tokens.map(token => ({
     origin: token.origin,
     email: token.email,
-    accessTokenValid: !isTokenExpired(token, flow.now),
+    accessTokenValid: !isTokenExpired(token, flow.now()),
   }));
   if (args.json) {
     flow.print({ sessions });

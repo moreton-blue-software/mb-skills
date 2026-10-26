@@ -1,7 +1,7 @@
 {
   "name": "embrace-claude-mod",
   "version": "0.1.0",
-  "description": "Embrace Claude Mod: sign in to your Embrace instance and discover and run authenticated queries",
+  "description": "Embrace Claude Mod: sign in, query records and run reviewed non-delete writes on compatible instances",
   "license": "UNLICENSED",
   "types": "./types/index.d.ts",
   "userConfig": {

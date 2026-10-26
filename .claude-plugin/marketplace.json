@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "embrace-claude-mod",
-      "description": "Sign in to Embrace and run authenticated tRPC queries from Claude Code",
+      "description": "Sign in to Embrace, query records and run reviewed non-delete writes from Claude Code",
       "version": "0.1.0",
       "source": "./plugins/embrace-claude-mod"
     }
