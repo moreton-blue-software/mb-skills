@@ -69,6 +69,11 @@ The login flow: the helper prints an authorize URL (PKCE S256, no client
 secret — public client); you open it in any browser, sign in, and the finish
 page shows a one-time code you paste back. The helper exchanges it and stores
 tokens in a 0600 file under `${XDG_STATE_HOME:-~/.local/state}/embrace-cli/`.
+The pane closes after a successful code submission. Use **Close**, its focused
+`x` shortcut, or Escape to dismiss it without signing out. In Claude Code's inline
+terminal renderer, mouse clicks on the frame's × may not be delivered; focus the
+pane with Ctrl+X then Tab, then press `x`, or use Ctrl+X then X. The native × was
+pointer-verified in the fullscreen renderer (`CLAUDE_CODE_NO_FLICKER=1`).
 
 ## Agent instructions for CRM, Projects, and other records
 

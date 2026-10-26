@@ -132,7 +132,7 @@ async function startLogin($: EngineInterface, options: PluginOptions, origin: st
     message: 'Open the authorize URL, sign in, then paste the code from the finish page.',
     email: null,
   } satisfies EmbraceLoginState));
-  await $.ui.open({ id: LOGIN_PANE, title: `Embrace login — ${hostOf(origin)}`, focus: true });
+  await $.ui.open({ id: LOGIN_PANE, title: `Embrace login — ${hostOf(origin)}`, focus: true, closeOnEscape: true });
   return `Embrace login started for ${origin}. Finish it in the Embrace login pane: open the authorize URL, sign in, and paste the one-time code.`;
 }
 
@@ -159,6 +159,7 @@ async function completeLogin($: EngineInterface, options: PluginOptions, pasted:
     await $.store.set(ORIGIN_STORE_KEY, state.origin);
     $.ui.status(`embrace: ${email ?? 'signed in'} @ ${hostOf(state.origin)}`);
     $.ui.toast(`Signed in to Embrace as ${email ?? hostOf(state.origin)}`);
+    await $.ui.close({ id: LOGIN_PANE });
   } else {
     await update($, login, previous => ({ ...previous, phase: 'error', message: helperError(result) } satisfies EmbraceLoginState));
   }
@@ -223,7 +224,16 @@ export const register: Register = (on, options) => {
     const state = await read($, login);
     return (
       <Box flexDirection="column" gap={1}>
-        <Text weight="semibold">Embrace Claude Mod login{state.origin ? ` — ${hostOf(state.origin)}` : ''}</Text>
+        <Box flexDirection="row" gap={1}>
+          <Text weight="semibold">Embrace Claude Mod login{state.origin ? ` — ${hostOf(state.origin)}` : ''}</Text>
+          <Button
+            key="close-login"
+            label="Close"
+            role="dismiss"
+            hotkey="x"
+            onPress={() => $.ui.close({ id: LOGIN_PANE })}
+          />
+        </Box>
         {state.phase === 'awaiting-code' && (
           <Box flexDirection="column">
             <Text dimColor>1. Open this URL in any browser and sign in:</Text>
