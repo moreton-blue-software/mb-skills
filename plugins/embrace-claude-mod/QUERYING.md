@@ -21,9 +21,12 @@ Choose the origin the user requested. If there are multiple signed-in origins an
 the target is unclear, ask which instance to use. Never silently switch tenants,
 use a demo account, or query every signed-in instance.
 
-If not signed in, ask the user to run `/embrace-login <origin>` and complete the
-browser flow in its pane. The user pastes the one-time code in the pane, not the
-conversation. Never read token/pending-login files, collect a password in chat,
+If not signed in, ask the user to run `/embrace-connect <origin>` and complete the
+browser flow in its pane (`/embrace-login` still works as an alias). The user
+pastes the one-time code in the pane, not the conversation. To switch between
+already-connected instances, the user runs `/embrace-connect` and picks one;
+switching changes the active instance and status line, never the credentials.
+Never read token/pending-login files, collect a password in chat,
 inspect browser cookies, or construct Authorization headers yourself. The helper
 owns refresh and all credential handling.
 

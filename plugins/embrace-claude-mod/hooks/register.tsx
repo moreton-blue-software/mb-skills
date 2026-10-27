@@ -1,11 +1,14 @@
 // Embrace Claude Mod.
 //
-// /embrace-login: host picker (mbdev default, localhost dev, or any review
-//   env via free text) → runs the Bun helper outside the sandbox to mint a
-//   PKCE S256 authorize URL → shows it (copy button) → collects the pasted
-//   one-time code → completes the secretless exchange → shows the signed-in
-//   email and pins a status line. Query tRPC procedures run as the signed-in
-//   user through the helper (e.g. `call v3.common.topBar.getCurrentUser`).
+// /embrace-connect <origin>: when the origin is already connected (helper
+//   status), switches the active instance to it; otherwise runs the paste-code
+//   flow (host picker with connected instances first, then mbdev default,
+//   localhost dev, or any origin via free text) → mints a PKCE S256 authorize
+//   URL through the Bun helper outside the sandbox → shows it (copy button) →
+//   collects the pasted one-time code → completes the secretless exchange →
+//   shows the signed-in email and pins a status line. /embrace-login remains
+//   as an alias. Query tRPC procedures run as the signed-in user through the
+//   helper (e.g. `call v3.common.topBar.getCurrentUser`).
 //
 // Tokens live only in the helper's 0600 state file; this module never sees a
 // token, and helper output is sanitized before printing anywhere.
@@ -13,6 +16,14 @@
 import { atom, read, update } from 'claude-code';
 import type { EngineInterface, PluginOptions, Register } from 'claude-code';
 import { appendQueryGuidance } from './query-guidance';
+import {
+  ADD_ANOTHER,
+  connectPickerOptions,
+  parseSessions,
+  pickStatusSession,
+  sessionLabel,
+  type SessionRow,
+} from './sessions';
 
 import type {
   EmbraceLoginState,
@@ -165,22 +176,92 @@ async function completeLogin($: EngineInterface, options: PluginOptions, pasted:
   }
 }
 
-async function refreshStatusLine($: EngineInterface, options: PluginOptions): Promise<void> {
+/** Connected sessions from the helper's `status --json`; empty on any failure. */
+async function listSessions($: EngineInterface, options: PluginOptions): Promise<SessionRow[]> {
   try {
     const helper = await resolveHelper($, options);
-    if (!helper) return;
+    if (!helper) return [];
     const result = await runHelper($, helper, ['status', '--json']);
-    if (result.exitCode !== 0) return;
-    const sessions = parseHelperJson(result.stdout)?.sessions;
-    if (!Array.isArray(sessions)) return;
-    const session = sessions.find(
-      (entry): entry is { origin: string; email: string | null; accessTokenValid: boolean } =>
-        !!entry && typeof entry === 'object' && (entry as { accessTokenValid?: unknown }).accessTokenValid === true,
-    );
+    if (result.exitCode !== 0) return [];
+    return parseSessions(parseHelperJson(result.stdout)?.sessions);
+  } catch {
+    return [];
+  }
+}
+
+/** Point the active instance at an already-connected origin; no login, no token write. */
+async function switchInstance($: EngineInterface, session: SessionRow): Promise<string> {
+  await $.store.set(ORIGIN_STORE_KEY, session.origin);
+  $.ui.status(`embrace: ${session.email ?? 'signed in'} @ ${hostOf(session.origin)}`);
+  $.ui.toast(`Switched to ${hostOf(session.origin)}`);
+  const expiryNote = session.accessTokenValid ? '' : ' Its access token will refresh on the next request.';
+  return `Switched to ${session.origin}${session.email ? ` (signed in as ${session.email})` : ''}.${expiryNote}`;
+}
+
+async function refreshStatusLine($: EngineInterface, options: PluginOptions): Promise<void> {
+  try {
+    const [sessions, activeOrigin] = await Promise.all([
+      listSessions($, options),
+      $.store.get(ORIGIN_STORE_KEY),
+    ]);
+    const session = pickStatusSession(sessions, activeOrigin);
     if (session) $.ui.status(`embrace: ${session.email ?? 'signed in'} @ ${hostOf(session.origin)}`);
   } catch {
     // Best-effort only; the status line stays unset.
   }
+}
+
+/**
+ * Shared `/embrace-connect` (and legacy `/embrace-login`) entry: with an origin,
+ * start the paste-code login; with none, offer connected instances to switch to
+ * (plus add-another/free text) before falling back to the origin picker.
+ */
+async function runConnect(
+  $: EngineInterface,
+  options: PluginOptions,
+  args: string,
+  aliased: boolean,
+): Promise<{ text: string }> {
+  const note = aliased ? 'Note: /embrace-login still works; /embrace-connect is the current command.\n' : '';
+  let requested = args.trim();
+  if (!requested) {
+    const sessions = await listSessions($, options);
+    const activeOrigin = await $.store.get(ORIGIN_STORE_KEY);
+    if (sessions.length > 0) {
+      let answer: string;
+      try {
+        answer = await $.ui.ask('Connect to which Embrace instance?', {
+          options: connectPickerOptions(sessions, activeOrigin),
+          header: 'Embrace instance',
+        });
+      } catch {
+        return { text: 'Embrace connect cancelled.' };
+      }
+      if (!answer) return { text: 'Embrace connect cancelled.' };
+      if (answer !== ADD_ANOTHER) {
+        const asOrigin = normalizeOrigin(answer);
+        const match = sessions.find(session => sessionLabel(session) === answer)
+          ?? (asOrigin ? sessions.find(session => session.origin === asOrigin) : undefined);
+        if (match) return { text: note + (await switchInstance($, match)) };
+        if (!asOrigin) return { text: `Not a valid Embrace origin: ${answer}` };
+        requested = asOrigin; // Free text under "Other": a new origin to sign in to.
+      }
+    }
+    if (!requested) {
+      try {
+        requested = await $.ui.ask('Sign in to which Embrace origin?', {
+          options: [defaultOrigin(options), LOCAL_DEV_ORIGIN],
+          header: 'Embrace origin',
+        });
+      } catch {
+        return { text: 'Embrace connect cancelled.' };
+      }
+    }
+  }
+  const origin = normalizeOrigin(requested);
+  if (!origin) return { text: `Not a valid Embrace origin: ${requested}` };
+  const message = await startLogin($, options, origin);
+  return { text: note + message };
 }
 
 export const register: Register = (on, options) => {
@@ -191,31 +272,21 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
+      name: 'embrace-connect',
+      description: 'Connect to an Embrace instance, or switch between connected ones',
+      argumentHint: '[origin]',
+    });
+    await $.command.register({
       name: 'embrace-login',
-      description: 'Sign in to an Embrace origin (PKCE paste-code flow)',
+      description: 'Alias of /embrace-connect (sign in to an Embrace instance)',
       argumentHint: '[origin]',
     });
     void refreshStatusLine($, options);
     return next(e);
   });
 
-  on('command.run', { command: 'embrace-login' }, async ($, e) => {
-    let requested = e.args.trim();
-    if (!requested) {
-      try {
-        requested = await $.ui.ask('Sign in to which Embrace origin?', {
-          options: [defaultOrigin(options), LOCAL_DEV_ORIGIN],
-          header: 'Embrace origin',
-        });
-      } catch {
-        return { text: 'Embrace login cancelled.' };
-      }
-    }
-    const origin = normalizeOrigin(requested);
-    if (!origin) return { text: `Not a valid Embrace origin: ${requested}` };
-    const message = await startLogin($, options, origin);
-    return { text: message };
-  });
+  on('command.run', { command: 'embrace-connect' }, async ($, e) => runConnect($, options, e.args, false));
+  on('command.run', { command: 'embrace-login' }, async ($, e) => runConnect($, options, e.args, true));
 
   on('ui.render', { component: 'Pane', requestId: LOGIN_PANE }, async ($, e, next) => {
     // Input exists on terminal, desktop and vscode; mobile cannot paste a code.
@@ -271,7 +342,7 @@ export const register: Register = (on, options) => {
             <Button
               key="restart"
               label="Start over"
-              onPress={() => void $.command.run({ command: 'embrace-login', args: state.origin })}
+              onPress={() => void $.command.run({ command: 'embrace-connect', args: state.origin })}
             />
           </Box>
         )}

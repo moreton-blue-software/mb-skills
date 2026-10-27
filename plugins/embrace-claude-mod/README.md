@@ -11,9 +11,11 @@ Two pieces:
 - **Helper** — `helper/cli.ts`, a Bun script the plugin spawns as a normal process
   (outside the plugin sandbox). Owns the whole OAuth flow, token custody and
   authenticated tRPC calls. Also usable standalone in a terminal.
-- **Plugin** — `.claude-plugin/`, `hooks/`, `types/`. Adds `/embrace-login`
-  (origin picker → authorize URL → paste the one-time code) and a signed-in
-  status line. tRPC queries run through the helper's `call` command.
+- **Plugin** — `.claude-plugin/`, `hooks/`, `types/`. Adds `/embrace-connect`
+  (instance picker → authorize URL → paste the one-time code; switching between
+  already-connected instances needs no new login) and a signed-in status line.
+  `/embrace-login` remains as an alias. tRPC queries run through the helper's
+  `call` command.
 
 Scope: **login + queries + reviewed non-delete mutations** on compatible Core
 instances. See [the mutation follow-up](https://github.com/moreton-blue-software/mb-agents/issues/269).
@@ -53,7 +55,9 @@ claude --plugin-dir /path/to/mb-skills/plugins/embrace-claude-mod
 ## Usage
 
 ```
-/embrace-login                       # pick an origin, sign in, paste the code
+/embrace-connect                     # pick a connected instance to switch to, or add one
+/embrace-connect https://<origin>    # sign in to a new instance, paste the code
+/embrace-login                       # legacy alias of /embrace-connect
 ```
 
 Then, as the signed-in user:
@@ -159,8 +163,10 @@ bunx tsc -p . --noEmit   # after loading the plugin once to generate engine type
 
 ## Stable login identity
 
-The official plugin ID is `embrace-claude-mod`; `/embrace-login` is unchanged.
-The OAuth client ID remains `claude-embrace-cli` and the private local state
-directory remains `embrace-cli` so the rename does not invalidate existing logins.
+The official plugin ID is `embrace-claude-mod`; `/embrace-connect` is the current
+command and `/embrace-login` remains as an alias. The OAuth client ID remains
+`claude-embrace-cli` and the private local state directory remains `embrace-cli`
+so the rename does not invalidate existing logins. Multiple instances stay
+connected simultaneously; `/embrace-connect` switches the active one.
 The initial public release supports login and read-only queries. This candidate
 adds reviewed non-delete writes without changing the stable login identity.

@@ -13,6 +13,9 @@ describe('installed query instructions', () => {
     expect(result[1]?.text).toContain(JSON.stringify(`${root}/QUERYING.md`));
     expect(result[1]?.text).toContain(JSON.stringify(`${root}/helper/cli.ts`));
     expect(result[1]?.text).toContain(JSON.stringify(`${root}/MUTATING.md`));
+    expect(result[1]?.text).toContain('/embrace-connect <origin>');
+    expect(result[1]?.text).toContain('legacy /embrace-login still works');
+    expect(result[1]?.text).toContain('never silently switch tenants');
     expect(sections).toHaveLength(1);
   });
 
