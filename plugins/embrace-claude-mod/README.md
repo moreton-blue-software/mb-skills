@@ -17,13 +17,13 @@ Two pieces:
   `/embrace-login` remains as an alias. tRPC queries run through the helper's
   `call` command.
 
-Scope: **login + queries + reviewed non-delete mutations** on compatible Core
+Scope: **login + queries + permission-filtered non-delete mutations** on compatible Core
 instances. See [the mutation follow-up](https://github.com/moreton-blue-software/mb-agents/issues/269).
 The current public release remains 0.1.0/read-only until this candidate is released;
 this branch does not publish or bump that version. The helper keeps `call` GET-only
 and POSTs explicit `mutate` commands directly to the discovered tRPC procedure.
 There is no additional Mod approval gate. Hard/soft deletes, file deletion and mixed
-business-record deletion are unsupported; unreviewed mutations remain unavailable.
+business-record deletion are unsupported; schema-unsupported mutations stay hidden server-side.
 The server rejects mutation procedures requested over GET. Delete exclusion is a
 helper-side restriction, not an extra server authorization layer or non-delete
 OAuth token scope; actual procedure permissions still apply.
@@ -123,7 +123,9 @@ contract instead of guessing. Customers need no private GitHub access.
 Read [MUTATING.md](MUTATING.md) before a requested record change. A compatible
 Core deployment must expose `v3.discovery.listMutations` and `describeMutation`;
 older instances retain queries but cannot use this write lane. Core supplies the
-reviewed operation metadata; the helper uses it for client eligibility, while the
+discovered operation metadata, auto-enumerated on newer versions and filtered to the
+user's RBAC write permissions and faithful input schemas; the helper uses it for
+client eligibility, while the
 actual mutation endpoint independently preserves normal user RBAC.
 
 ```text
@@ -169,4 +171,4 @@ command and `/embrace-login` remains as an alias. The OAuth client ID remains
 so the rename does not invalidate existing logins. Multiple instances stay
 connected simultaneously; `/embrace-connect` switches the active one.
 The initial public release supports login and read-only queries. This candidate
-adds reviewed non-delete writes without changing the stable login identity.
+adds permission-filtered non-delete writes without changing the stable login identity.

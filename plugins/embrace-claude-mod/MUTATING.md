@@ -1,7 +1,7 @@
 # Write Embrace records as the signed-in user
 
 Use this guide only when the user asks to create or change an Embrace record.
-Reviewed non-delete mutations are available on compatible Core instances, without
+Permission-filtered non-delete mutations are available on compatible Core instances, without
 an extra Mod approval step. Claude Code's own tool permissions still apply;
 never bypass a refused action. Deleting records is not supported.
 
@@ -34,10 +34,12 @@ contract states. Check required fields, input presence, IDs, enums and limitatio
 Compare known deployment provenance between list and detail; repeat discovery
 if it changes. Unsupported schemas are a stop, not permission to invent inputs.
 
-The reviewed inventory is authoritative, not a client name blacklist or a
-`create`/`update` prefix check. Hard-delete, soft-delete, uploaded-file deletion,
-mixed business-record deletion and unreviewed actions remain unsupported.
-Do not probe missing names or fall back to arbitrary POST calls on older instances.
+The discovered inventory is authoritative, not a client name blacklist or a
+`create`/`update` prefix check. Newer Core versions auto-discover every
+schema-faithful mutation and hide input-unsupported ones server-side, so a
+missing name means unsupported on that instance. Hard-delete, soft-delete, uploaded-file deletion
+and mixed business-record deletion remain unsupported on the client. Do not probe
+missing names or fall back to arbitrary POST calls on older instances.
 
 ## 3. Execute once through the helper
 
