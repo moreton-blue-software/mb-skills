@@ -1,6 +1,6 @@
-// Execute reviewed non-delete mutations through Core's fixed gateway only.
+// Execute a discovered non-delete mutation through its existing tRPC endpoint.
 // Usage: cli.ts mutate --origin <url> <name> [input-json].
-import { DESCRIBE_MUTATION, EXECUTE_MUTATION } from './discovery';
+import { DESCRIBE_MUTATION } from './discovery';
 import { httpFetch } from './fetch';
 import { assertProcedureName, callProcedure } from './trpc';
 import { deserializeEnvelope, serializeInput } from './superjson-lite';
@@ -64,18 +64,21 @@ export async function executeReviewedMutation(args: {
     return rejected('Mutation contract requires input; supply the documented JSON argument');
   }
 
-  // Omitted input stays omitted, rather than becoming a null input.
+  // Contact updates may create a related company; this client supports updates only.
+  if (args.procedure === 'v3.crm.contact.updateContact' && record(args.input)
+    && args.input.contactCompanyName && args.input.useExisting !== true) {
+    return rejected('Creating a company through contact update is unsupported; no mutation was dispatched');
+  }
   let body: string;
   try {
-    body = JSON.stringify(serializeInput({ name: args.procedure,
-      ...(args.input === undefined ? {} : { input: args.input }) }));
+    body = JSON.stringify(serializeInput(args.input));
   } catch {
     return rejected('Mutation input must be plain JSON; no mutation was dispatched');
   }
-  // The named business mutation is never sent directly. Core rechecks eligibility,
-  // permissions and actual input validation; no request bookkeeping or retries.
+  // Discovery determines client eligibility. The actual procedure independently
+  // enforces current permissions and input validation; this is not a token scope.
   try {
-    const response = await httpFetch(`${args.origin}/trpc/${EXECUTE_MUTATION}`, {
+    const response = await httpFetch(`${args.origin}/trpc/${args.procedure}`, {
       method: 'POST',
       redirect: 'error',
       headers: { Authorization: `Bearer ${args.accessToken}`, 'Content-Type': 'application/json' },
@@ -83,19 +86,19 @@ export async function executeReviewedMutation(args: {
       signal: AbortSignal.timeout(30_000),
     });
     let payload: unknown;
-    try { payload = await response.json(); } catch { return uncertain('Mutation gateway returned an unreadable response'); }
-    if (!record(payload)) return uncertain('Mutation gateway returned a malformed response');
+    try { payload = await response.json(); } catch { return uncertain('Mutation procedure returned an unreadable response'); }
+    if (!record(payload)) return uncertain('Mutation procedure returned a malformed response');
     if (!response.ok || payload.error) {
       const error = record(payload.error) && record(payload.error.json) && record(payload.error.json.data)
         ? payload.error.json.data.code : undefined;
       const code = typeof error === 'string' && /^[A-Z_]{1,64}$/.test(error) ? error : `HTTP_${response.status}`;
-      return uncertain(`Mutation gateway did not report success (${code})`);
+      return uncertain(`Mutation procedure did not report success (${code})`);
     }
     if (!record(payload.result) || !record(payload.result.data) || !Object.hasOwn(payload.result.data, 'json')) {
-      return uncertain('Mutation gateway returned a malformed result envelope');
+      return uncertain('Mutation procedure returned a malformed result envelope');
     }
     return { ok: true, data: deserializeEnvelope(payload.result.data) };
   } catch {
-    return uncertain('Mutation gateway connection failed after dispatch');
+    return uncertain('Mutation procedure connection failed after dispatch');
   }
 }

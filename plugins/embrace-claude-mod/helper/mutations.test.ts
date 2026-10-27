@@ -1,7 +1,7 @@
 // Fake-origin mutation preflight/transport tests; no live account or server.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { parseCliArgs, runCommand } from './cli';
-import { DESCRIBE_MUTATION, EXECUTE_MUTATION, LIST_MUTATIONS } from './discovery';
+import { DESCRIBE_MUTATION, LIST_MUTATIONS } from './discovery';
 import { setFetchForTests } from './fetch';
 import { executeReviewedMutation } from './mutations';
 
@@ -25,7 +25,7 @@ function stub(options: { describe?: unknown; executeResponse?: () => Response | 
     requests.push({ url, method: init?.method, body: init?.body === undefined ? undefined : String(init.body), redirect: init?.redirect });
     expect((init?.headers as Record<string, string>).Authorization).toBe(`Bearer ${TOKEN.access_token}`);
     if (url.includes(DESCRIBE_MUTATION)) return envelope(options.describe ?? metadata());
-    if (url.endsWith(EXECUTE_MUTATION)) return options.executeResponse ? options.executeResponse() : envelope(company);
+    if (init?.method === 'POST' && new URL(url).pathname.startsWith('/trpc/v3.')) return options.executeResponse ? options.executeResponse() : envelope(company);
     throw new Error('Unexpected path');
   });
   return requests;
@@ -52,18 +52,18 @@ describe('mutation CLI selection', () => {
   });
 });
 
-describe('fixed mutation gateway', () => {
-  test('fresh description is GET; one POST carries only name/input and returns actual data', async () => {
+describe('direct mutation transport', () => {
+  test('fresh description is GET; one POST sends actual input to the named procedure', async () => {
     const requests = stub();
     expect(await execute()).toEqual({ ok: true, data: company });
     expect(requests).toHaveLength(2);
     expect(requests[0]!.method).toBe('GET');
     expect(JSON.parse(new URL(requests[0]!.url).searchParams.get('input')!).json).toEqual({ name: NAME });
-    expect(requests[1]!.url).toBe(`${ORIGIN}/trpc/${EXECUTE_MUTATION}`);
+    expect(requests[1]!.url).toBe(`${ORIGIN}/trpc/${NAME}`);
     expect(requests[1]!.method).toBe('POST');
     expect(requests[1]!.redirect).toBe('error');
-    expect(JSON.parse(requests[1]!.body!).json).toEqual({ name: NAME, input: { name: 'Fixture' } });
-    expect(requests.some(r => new URL(r.url).pathname === `/trpc/${NAME}`)).toBe(false);
+    expect(JSON.parse(requests[1]!.body!)).toEqual({ json: { name: 'Fixture' } });
+    expect(requests.filter(r => r.method === 'POST')).toHaveLength(1);
   });
   test('separate explicit calls each dispatch once; no client replay cache is promised', async () => {
     const requests = stub();
@@ -88,7 +88,7 @@ describe('fixed mutation gateway', () => {
       expect(requests).toHaveLength(1);
     }
   });
-  test('required input cannot be absent; none input stays omitted', async () => {
+  test('required input cannot be absent; none input uses the SuperJSON undefined envelope', async () => {
     const required = stub();
     const missing = await executeReviewedMutation({ origin: ORIGIN, procedure: NAME, accessToken: TOKEN.access_token });
     expect(missing.ok).toBe(false);
@@ -97,9 +97,35 @@ describe('fixed mutation gateway', () => {
       executeResponse: () => Response.json({ result: { data: { json: null, meta: { values: ['undefined'], v: 1 } } } }) });
     expect(await executeReviewedMutation({ origin: ORIGIN, procedure: NAME, accessToken: TOKEN.access_token }))
       .toEqual({ ok: true, data: undefined });
-    const body = JSON.parse(requests[1]!.body!);
-    expect(Object.hasOwn(body.json, 'input')).toBe(false);
-    expect(body.meta).toBeUndefined();
+    expect(JSON.parse(requests[1]!.body!)).toEqual({ json: null, meta: { values: ['undefined'], v: 1 } });
+  });
+  test('plain JSON input is not wrapped in a proxy request and richer inputs are refused', async () => {
+    for (const input of [null, false, 0, ['one', 'two'], { date: '2026-10-26' }]) {
+      const requests = stub();
+      expect((await execute(input)).ok).toBe(true);
+      expect(JSON.parse(requests[1]!.body!)).toEqual({ json: input });
+    }
+    for (const input of [new Date('2026-10-26T00:00:00.000Z'), { nested: new Map() }]) {
+      const requests = stub();
+      const result = await execute(input);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.outcome).toBe('not-dispatched');
+      expect(requests.filter(r => r.method === 'POST')).toHaveLength(0);
+    }
+  });
+  test('contact updates reject nested company creation on the client before POST', async () => {
+    const name = 'v3.crm.contact.updateContact';
+    for (const input of [{ contactCompanyName: 'New company' }, { contactCompanyName: 'New company', useExisting: false }]) {
+      const requests = stub({ describe: { ...metadata(), name } });
+      const result = await executeReviewedMutation({ origin: ORIGIN, procedure: name, input, accessToken: TOKEN.access_token });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.error).toContain('through contact update');
+      expect(requests.filter(r => r.method === 'POST')).toHaveLength(0);
+    }
+    const requests = stub({ describe: { ...metadata(), name } });
+    expect((await executeReviewedMutation({ origin: ORIGIN, procedure: name,
+      input: { contactCompanyName: 'Existing company', useExisting: true }, accessToken: TOKEN.access_token })).ok).toBe(true);
+    expect(requests[1]!.url).toBe(`${ORIGIN}/trpc/${name}`);
   });
   test('decodes actual procedure values without requiring an object receipt or id', async () => {
     for (const value of [null, false, 0, ['one', 'two'], { status: 'unresolved' }]) {
@@ -113,13 +139,21 @@ describe('fixed mutation gateway', () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect((result.data as { updatedAt: Date }).updatedAt).toBeInstanceOf(Date);
   });
-  test('hidden/deleted or denied mutation descriptions never cause fallback POST', async () => {
-    let count = 0;
-    setFetchForTests(async () => { count++; return Response.json({ error: { json: { data: { code: 'NOT_FOUND' } } } }, { status: 404 }); });
-    const result = await execute();
-    expect(result.ok).toBe(false);
-    expect(count).toBe(1);
-    if (!result.ok) expect(result.error.error).toContain('NOT_FOUND');
+  test('hidden/deleted or denied mutation descriptions never cause direct POST', async () => {
+    for (const procedure of [NAME, 'v3.crm.company.deleteCompany', 'v3.common.issues.deleteIssue', 'v3.common.attachments.deleteAttachment']) {
+      const requests: Captured[] = [];
+      setFetchForTests(async (input, init) => {
+        requests.push({ url: String(input), method: init?.method });
+        return Response.json({ error: { json: { data: { code: 'NOT_FOUND' } } } }, { status: 404 });
+      });
+      const result = await executeReviewedMutation({ origin: ORIGIN, procedure,
+        input: { id: 'fixture' }, accessToken: TOKEN.access_token });
+      expect(result.ok).toBe(false);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.method).toBe('GET');
+      expect(new URL(requests[0]!.url).pathname).toBe(`/trpc/${DESCRIBE_MUTATION}`);
+      if (!result.ok) expect(result.error.error).toContain('NOT_FOUND');
+    }
   });
   test('server errors expose only a bounded code, never raw message or automatic retry', async () => {
     for (const code of ['FORBIDDEN', 'BAD_REQUEST', 'CONFLICT']) {

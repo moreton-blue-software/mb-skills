@@ -131,8 +131,8 @@ Omit the final argument for a contract with void input. Supply ordinary JSON for
 object input; the helper handles superjson, Bearer authentication and refresh.
 Every `call` query uses GET with an encoded input envelope. Never use POST, a
 mutation, subscription, approval action, or a direct HTTP fallback for a query.
-Explicit user-requested writes use the separate reviewed gateway described in
-[MUTATING.md](MUTATING.md), never query fallback. Authentication itself still needs
+Explicit user-requested writes use the separate `mutate` command and discovered
+mutation endpoints described in [MUTATING.md](MUTATING.md), never query fallback. Authentication itself still needs
 OAuth token/refresh/revoke POST requests, handled by the helper.
 
 The helper accepts any syntactically valid v3 query name; it has no module

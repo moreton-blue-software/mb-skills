@@ -5,7 +5,6 @@ export const LIST_QUERIES = 'v3.discovery.listQueries';
 export const DESCRIBE_QUERY = 'v3.discovery.describeQuery';
 export const LIST_MUTATIONS = 'v3.discovery.listMutations';
 export const DESCRIBE_MUTATION = 'v3.discovery.describeMutation';
-export const EXECUTE_MUTATION = 'v3.discovery.executeMutation';
 export type OperationType = 'query' | 'mutation';
 
 export function discoveryRequest(args: {

@@ -44,15 +44,20 @@ bun <absolute-helper-path> mutate --origin <origin> <described-name> '<input-jso
 ```
 
 Omit JSON only when the contract accepts absent input. The helper obtains a fresh
-description, then sends one POST with `{name,input?}` to
-`v3.discovery.executeMutation`. Core checks eligibility and current permissions,
-then uses the actual procedure's validation and handler. The helper returns that
-procedure's result, not a separate receipt. Queries still use `call` with GET only;
-there is no query-to-mutation fallback or additional Mod approval gate.
+description, then sends one POST directly to `/trpc/<described-name>` with that
+procedure's input in a SuperJSON envelope. The actual tRPC procedure independently
+checks current permissions and validates input before its handler runs. The helper
+returns the procedure's result; no execution proxy or separate receipt is involved.
+Queries still use `call` with GET only; there is no query-to-mutation fallback or
+additional Mod approval gate.
 
-The gateway is the non-delete boundary for this Mod, **not** a globally restricted
-OAuth token scope. Never retrieve the token to bypass it. Normal browser actions
-and existing Embrace Agent proposal policies are unaffected.
+Delete exclusion is a helper-side eligibility restriction, **not** an additional
+server authorization layer or globally restricted OAuth token scope. The server
+keeps its existing permissions and browser behavior. Never retrieve the token or
+construct requests outside the helper to bypass this restriction. For contact
+updates, creating a company through `contactCompanyName` is not supported: use an
+existing company with `useExisting: true`. Existing Embrace Agent proposal policies
+are unaffected.
 
 ## 4. Verify results and handle failures
 

@@ -19,11 +19,12 @@ Scope: **login + queries + reviewed non-delete mutations** on compatible Core
 instances. See [the mutation follow-up](https://github.com/moreton-blue-software/mb-agents/issues/269).
 The current public release remains 0.1.0/read-only until this candidate is released;
 this branch does not publish or bump that version. The helper keeps `call` GET-only
-and uses a separate fixed gateway for explicit `mutate` commands. There is no
-additional Mod approval gate. Hard/soft deletes, file deletion and mixed
+and POSTs explicit `mutate` commands directly to the discovered tRPC procedure.
+There is no additional Mod approval gate. Hard/soft deletes, file deletion and mixed
 business-record deletion are unsupported; unreviewed mutations remain unavailable.
-The server rejects mutation procedures requested over GET. These helper/gateway
-boundaries are not a globally read-only or non-delete OAuth token scope.
+The server rejects mutation procedures requested over GET. Delete exclusion is a
+helper-side restriction, not an extra server authorization layer or non-delete
+OAuth token scope; actual procedure permissions still apply.
 
 ## Requirements
 
@@ -116,9 +117,10 @@ contract instead of guessing. Customers need no private GitHub access.
 ## Supported writes
 
 Read [MUTATING.md](MUTATING.md) before a requested record change. A compatible
-Core deployment must expose `v3.discovery.listMutations`, `describeMutation` and
-`executeMutation`; older instances retain queries but cannot use this write lane.
-Core decides the reviewed operation inventory and preserves normal user RBAC.
+Core deployment must expose `v3.discovery.listMutations` and `describeMutation`;
+older instances retain queries but cannot use this write lane. Core supplies the
+reviewed operation metadata; the helper uses it for client eligibility, while the
+actual mutation endpoint independently preserves normal user RBAC.
 
 ```text
 bun helper/cli.ts discover --type mutation --origin <url> --search company --limit 20
@@ -127,9 +129,10 @@ bun helper/cli.ts mutate --origin <url> <described-name> '<input-json>'
 ```
 
 The helper fetches a fresh contract, requires supported schemas and known
-deployment provenance, and POSTs only `{name,input?}` to the fixed Core execution
-gateway. It returns the actual procedure result, without request IDs, stored
-receipts or replay state. It never POSTs directly to the business procedure.
+deployment provenance, then POSTs the actual input directly to
+`/trpc/<described-name>` using the existing SuperJSON envelope. It returns the
+actual procedure result, without an execution proxy, request IDs, stored receipts
+or replay state.
 There is no automatic write retry or server-side duplicate-submission protection;
 submitting the same write twice can execute it twice. After an uncertain response,
 check the existing record before another attempt. Query discovery defaults and
