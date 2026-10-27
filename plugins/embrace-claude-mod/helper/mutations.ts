@@ -56,6 +56,13 @@ export async function executeReviewedMutation(args: {
   if (!supportedContract(metadata.input, 'input') || !supportedContract(metadata.output, 'output')) {
     return rejected('Mutation input or output contract is unsupported; no mutation was dispatched');
   }
+  // Client eligibility only (never a server boundary): newer Core publishes
+  // delete metadata alongside everything else, so this client refuses the
+  // delete-shaped names itself rather than relying on the server hiding them.
+  const lastSegment = args.procedure.split('.').pop() ?? '';
+  if (/delete/i.test(lastSegment) || /^remove/i.test(lastSegment)) {
+    return rejected(`Deleting records is unsupported by this client; no mutation was dispatched (${lastSegment})`);
+  }
   const inputContract = metadata.input;
   if (record(inputContract) && inputContract.status === 'none' && args.input !== undefined) {
     return rejected('Mutation contract accepts no input; omit the JSON argument');

@@ -12,7 +12,7 @@ const NOW = Date.parse('2026-10-26T12:00:00.000Z');
 const TOKEN = { origin: ORIGIN, access_token: 'SECRET-ACCESS', refresh_token: 'SECRET-REFRESH',
   email: 'fixture@example.test', expires_at: NOW + 3_600_000 };
 const tokenStore = { get: async () => TOKEN, put: async () => {}, remove: async () => true, list: async () => [TOKEN] };
-const metadata = () => ({ deployment: DEPLOYMENT, name: NAME, type: 'mutation',
+const metadata = (name: string = NAME) => ({ deployment: DEPLOYMENT, name, type: 'mutation',
   input: { status: 'supported', presence: 'required', fidelity: 'structural', schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
   output: { status: 'supported', fidelity: 'structural', schema: { type: 'object' } } });
 const envelope = (data: unknown) => Response.json({ result: { data: { json: data } } });
@@ -153,6 +153,16 @@ describe('direct mutation transport', () => {
       expect(requests[0]!.method).toBe('GET');
       expect(new URL(requests[0]!.url).pathname).toBe(`/trpc/${DESCRIBE_MUTATION}`);
       if (!result.ok) expect(result.error.error).toContain('NOT_FOUND');
+    }
+  });
+  test('published delete metadata is refused client-side before any POST', async () => {
+    for (const procedure of ['v3.crm.company.deleteCompany', 'v3.task.bulkDeleteTasks', 'v3.settings.removeModelTag']) {
+      const requests = stub({ describe: metadata(procedure) });
+      const result = await executeReviewedMutation({ origin: ORIGIN, procedure,
+        input: { id: 'fixture' }, accessToken: TOKEN.access_token });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.error).toContain('no mutation was dispatched');
+      expect(requests.filter(r => r.method === 'POST')).toHaveLength(0);
     }
   });
   test('server errors expose only a bounded code, never raw message or automatic retry', async () => {
