@@ -1,7 +1,7 @@
 {
   "name": "embrace-claude-mod",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Embrace Claude Mod login, query and reviewed non-delete mutation helper",
   "scripts": {
     "test": "bun test"

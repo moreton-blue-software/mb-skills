@@ -7,7 +7,7 @@
     {
       "name": "embrace-claude-mod",
       "description": "Sign in to Embrace, query records and run reviewed non-delete writes from Claude Code",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "source": "./plugins/embrace-claude-mod"
     }
   ],
