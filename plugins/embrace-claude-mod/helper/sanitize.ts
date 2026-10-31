@@ -12,6 +12,9 @@ export function sanitizeForPrint(value: unknown): unknown {
 
 function redact(value: unknown, seen: unknown[]): unknown {
   if (Array.isArray(value)) return value.map(item => redact(item, seen));
+  // Dates revived by superjson have no enumerable entries; print them as ISO
+  // strings (invalid ones as null) instead of collapsing to {}.
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString();
   if (value && typeof value === 'object') {
     if (seen.includes(value)) return '[circular]';
     const nextSeen = [...seen, value];

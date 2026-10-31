@@ -43,4 +43,16 @@ describe('sanitizeForPrint', () => {
       body: 'the access_token=abc in prose',
     });
   });
+
+  test('prints revived Dates as ISO strings instead of {}', () => {
+    const value = {
+      activityDate: new Date('2026-10-30T01:30:00.000Z'),
+      nested: { dates: [new Date('2026-01-01T00:00:00.000Z')] },
+      invalid: new Date('not-a-date'),
+    };
+    const sanitized = sanitizeForPrint(value) as typeof value;
+    expect(sanitized.activityDate).toBe('2026-10-30T01:30:00.000Z');
+    expect((sanitized.nested as { dates: unknown[] }).dates[0]).toBe('2026-01-01T00:00:00.000Z');
+    expect(sanitized.invalid).toBe(null);
+  });
 });
