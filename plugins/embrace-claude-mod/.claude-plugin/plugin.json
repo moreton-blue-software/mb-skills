@@ -1,0 +1,23 @@
+{
+  "name": "embrace-claude-mod",
+  "description": "Embrace Claude Mod: sign in, query records and run reviewed non-delete writes on compatible instances",
+  "license": "UNLICENSED",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "origin": {
+      "type": "string",
+      "title": "Default Embrace origin",
+      "default": "",
+      "description": "Optional default Embrace origin the picker offers first (leave empty to type it at sign-in)"
+    },
+    "helperPath": {
+      "type": "string",
+      "title": "Helper path",
+      "default": "",
+      "description": "Optional absolute helper path; by default uses the helper bundled with this installed plugin"
+    }
+  },
+  "author": {
+    "name": "Moreton Blue Software"
+  }
+}

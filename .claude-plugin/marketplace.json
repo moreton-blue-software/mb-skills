@@ -1,0 +1,16 @@
+{
+  "name": "mb-skills",
+  "owner": {
+    "name": "Moreton Blue Software"
+  },
+  "plugins": [
+    {
+      "name": "embrace-claude-mod",
+      "description": "Sign in to Embrace, query records and run reviewed non-delete writes from Claude Code",
+      "source": "./plugins/embrace-claude-mod"
+    }
+  ],
+  "metadata": {
+    "description": "Public Moreton Blue skills and Claude Code plugins"
+  }
+}
