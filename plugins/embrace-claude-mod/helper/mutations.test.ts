@@ -139,7 +139,7 @@ describe('direct mutation transport', () => {
     expect(result.ok).toBe(true);
     if (result.ok) expect((result.data as { updatedAt: Date }).updatedAt).toBeInstanceOf(Date);
   });
-  test('hidden/deleted or denied mutation descriptions never cause direct POST', async () => {
+  test('denied or undiscovered mutation descriptions never cause direct POST', async () => {
     for (const procedure of [NAME, 'v3.crm.company.deleteCompany', 'v3.common.issues.deleteIssue', 'v3.common.attachments.deleteAttachment']) {
       const requests: Captured[] = [];
       setFetchForTests(async (input, init) => {
@@ -155,15 +155,35 @@ describe('direct mutation transport', () => {
       if (!result.ok) expect(result.error.error).toContain('NOT_FOUND');
     }
   });
-  test('published delete metadata is refused client-side before any POST', async () => {
+  test('delete-shaped names with a supported contract dispatch exactly one POST', async () => {
     for (const procedure of ['v3.crm.company.deleteCompany', 'v3.task.bulkDeleteTasks', 'v3.settings.removeModelTag']) {
       const requests = stub({ describe: metadata(procedure) });
       const result = await executeReviewedMutation({ origin: ORIGIN, procedure,
         input: { id: 'fixture' }, accessToken: TOKEN.access_token });
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error.error).toContain('no mutation was dispatched');
-      expect(requests.filter(r => r.method === 'POST')).toHaveLength(0);
+      expect(result).toEqual({ ok: true, data: company });
+      expect(requests).toHaveLength(2);
+      expect(requests[0]!.method).toBe('GET');
+      expect(JSON.parse(new URL(requests[0]!.url).searchParams.get('input')!).json).toEqual({ name: procedure });
+      expect(requests[1]!.url).toBe(`${ORIGIN}/trpc/${procedure}`);
+      expect(requests[1]!.method).toBe('POST');
+      expect(requests[1]!.redirect).toBe('error');
+      expect(JSON.parse(requests[1]!.body!)).toEqual({ json: { id: 'fixture' } });
+      expect(requests.filter(r => r.method === 'POST')).toHaveLength(1);
     }
+  });
+  test('a delete answered by the server as not-found reports uncertainty without retry', async () => {
+    const procedure = 'v3.crm.company.deleteCompany';
+    const requests = stub({ describe: metadata(procedure),
+      executeResponse: () => Response.json({ error: { json: { message: 'SECRET-record-gone', data: { code: 'NOT_FOUND' } } } }, { status: 404 }) });
+    const result = await executeReviewedMutation({ origin: ORIGIN, procedure,
+      input: { id: 'fixture' }, accessToken: TOKEN.access_token });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.error).toContain('NOT_FOUND');
+      expect(result.error.outcome).toBe('unknown');
+    }
+    expect(JSON.stringify(result)).not.toContain('SECRET');
+    expect(requests.filter(r => r.method === 'POST')).toHaveLength(1);
   });
   test('server errors expose only a bounded code, never raw message or automatic retry', async () => {
     for (const code of ['FORBIDDEN', 'BAD_REQUEST', 'CONFLICT']) {

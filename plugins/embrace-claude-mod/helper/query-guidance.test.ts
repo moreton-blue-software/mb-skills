@@ -25,16 +25,23 @@ describe('installed query instructions', () => {
     expect(text).toContain('discover/describe --type mutation');
     expect(text).toContain('directly to /trpc/<described-name>');
     expect(text).not.toContain('v3.discovery.executeMutation');
-    expect(text).toContain('Delete exclusion is helper-side');
-    expect(writes).toContain('**not** an additional');
+    expect(text).toContain("Deletes are permitted with the write guide's confirmation protocol");
+    expect(text).toContain('state the exact record type, record name and record ID');
+    expect(text).toContain('never batch-delete');
+    expect(text).toContain('archives the record atomically');
+    expect(text).toContain('no user-facing restore yet');
+    expect(text).toContain('repeat deletes return not-found');
+    expect(writes).toContain('atomic archive, not erasure');
+    expect(writes).toContain('no helper-side delete gate, additional server authorization layer or');
     expect(text).not.toContain('--request-id');
     expect(text).toContain('no additional Mod approval gate');
     expect(text).toContain('Never automatically retry POST');
     expect(text).toContain('duplicate submissions can execute twice');
-    expect(writes).toContain('Hard-delete, soft-delete, uploaded-file deletion');
+    expect(writes).toContain('Confirmation protocol — before dispatching any delete');
+    expect(writes).toContain('Never batch-delete, never automatically retry a');
     expect(writes).toContain('not a client name blacklist');
     expect(writes).toContain('Do not automatically retry');
-    expect(writes).toContain('separately scoped');
+    expect(writes).toContain('rollback, cleanup or fixture removal');
     expect(guide).toContain('MUTATING.md');
   });
 

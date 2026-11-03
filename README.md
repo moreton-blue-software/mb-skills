@@ -113,7 +113,7 @@ Skills in this repository avoid hardcoded deployment endpoints and credentials. 
 
 ## Embrace Claude Mod
 
-Install the login and query-only plugin from this public repository:
+Install the login, query and reviewed-mutation plugin from this public repository:
 
 ```text
 /plugin install embrace-claude-mod --marketplace moreton-blue-software/mb-skills
@@ -121,7 +121,9 @@ Install the login and query-only plugin from this public repository:
 
 Confirm adding the marketplace and select an installation scope. Run
 `/embrace-login https://<your-embrace-instance>` to sign in through your browser.
-The helper keeps credentials outside the mod sandbox and sends only GET tRPC queries.
+The helper keeps credentials outside the mod sandbox; queries use GET, and
+reviewed mutations — including confirmation-gated archived deletes — POST
+directly to discovered tRPC procedures.
 Bun and a Claude Code build with hooks-module support are required.
 See [plugin setup and security notes](plugins/embrace-claude-mod/README.md).
 

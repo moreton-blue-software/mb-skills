@@ -3,7 +3,8 @@
 Moreton Blue's Embrace integration, not an Anthropic product.
 
 Sign in to an Embrace instance from Claude Code (PKCE paste-code OAuth), then call
-tRPC queries and supported non-delete mutations as yourself. Built for [core-v3#2933](https://github.com/moreton-blue-software/core-v3/issues/2933)
+tRPC queries and supported mutations — including confirmation-gated archived
+deletes — as yourself. Built for [core-v3#2933](https://github.com/moreton-blue-software/core-v3/issues/2933)
 (requires the core-v3 OIDC bearer branch deployed on the target instance).
 
 Two pieces:
@@ -17,18 +18,24 @@ Two pieces:
   `/embrace-login` remains as an alias. tRPC queries run through the helper's
   `call` command.
 
-Scope: **login + queries + permission-filtered non-delete mutations** on compatible Core
-instances. See [the mutation follow-up](https://github.com/moreton-blue-software/mb-agents/issues/269).
+Scope: **login + queries + permission-filtered mutations including archived deletes** on
+compatible Core instances. See [the mutation follow-up](https://github.com/moreton-blue-software/mb-agents/issues/269).
 The current public release remains 0.1.0/read-only until this candidate is released;
 this branch does not publish or bump that version. The helper keeps `call` GET-only
 and POSTs explicit `mutate` commands directly to the discovered tRPC procedure.
-There is no additional Mod approval gate. Hard/soft deletes, file deletion and mixed
-business-record deletion are unsupported; mutations whose input contains a field
+There is no additional Mod approval gate. Mutations whose input contains a field
 Core cannot faithfully describe publish with that field omitted and an explicit
 "clients must not send it" warning.
-The server rejects mutation procedures requested over GET. Delete exclusion is a
-helper-side restriction, not an extra server authorization layer or non-delete
-OAuth token scope; actual procedure permissions still apply.
+The server rejects mutation procedures requested over GET. Server RBAC and the
+atomic archive transaction are the delete boundary; there is no helper-side delete
+gate or delete-restricted OAuth token scope. Deleting archives the record — data is
+retained in an archive table with who/when audit, normal lists and searches no
+longer show it, there is no user-facing restore yet (restoration requires an
+administrator or data operator), and repeat deletes return not-found. Before
+dispatching any delete, state the exact record type, name and ID and require the
+user's explicit confirmation; never batch-delete, never automatically retry a
+delete, and never use a delete as rollback or cleanup unless the user instructed
+it. See [MUTATING.md](MUTATING.md) for the full protocol.
 
 ## Requirements
 
@@ -194,4 +201,5 @@ command and `/embrace-login` remains as an alias. The OAuth client ID remains
 so the rename does not invalidate existing logins. Multiple instances stay
 connected simultaneously; `/embrace-connect` switches the active one.
 The initial public release supports login and read-only queries. This candidate
-adds permission-filtered non-delete writes without changing the stable login identity.
+adds permission-filtered writes, including confirmation-gated archived deletes,
+without changing the stable login identity.

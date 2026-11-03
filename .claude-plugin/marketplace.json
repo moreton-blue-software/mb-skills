@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "embrace-claude-mod",
-      "description": "Sign in to Embrace, query records and run reviewed non-delete writes from Claude Code",
+      "description": "Sign in to Embrace, query records and run reviewed writes, including confirmation-gated archived deletes, from Claude Code",
       "source": "./plugins/embrace-claude-mod"
     }
   ],

@@ -1,13 +1,15 @@
 # Write Embrace records as the signed-in user
 
-Use this guide only when the user asks to create or change an Embrace record.
-Permission-filtered non-delete mutations are available on compatible Core instances, without
-an extra Mod approval step. Claude Code's own tool permissions still apply;
-never bypass a refused action. Deleting records is not supported.
+Use this guide only when the user asks to create, change or delete an Embrace
+record. Permission-filtered mutations are available on compatible Core instances,
+without an extra Mod approval step. Claude Code's own tool permissions still
+apply; never bypass a refused action. Deletes are atomic archives, not erasure,
+and require the confirmation protocol in section 3.
 
-Examples: "Create a company named Acme Demo with this website" or "Update this
-contact's phone number to the number I provided." Availability depends on the
-instance's supported operations, not these examples.
+Examples: "Create a company named Acme Demo with this website," "Update this
+contact's phone number to the number I provided," or "Delete the Acme Demo
+company." Availability depends on the instance's supported operations, not
+these examples.
 
 ## 1. Select the instance and intended change
 
@@ -42,9 +44,9 @@ field omitted and a limitation like `Omitted field input.attachments: its type
 cannot be faithfully described; clients must not send it.` Never send an omitted
 field or invent a value for it — build the input from the remaining described
 fields only. A genuinely missing name still means unsupported on that instance.
-Hard-delete, soft-delete, uploaded-file deletion
-and mixed business-record deletion remain unsupported on the client. Do not probe
-missing names or fall back to arbitrary POST calls on older instances.
+Delete mutations are part of this inventory and follow the same contract rules.
+Do not probe missing names or fall back to arbitrary POST calls on older
+instances.
 
 ## 3. Execute once through the helper
 
@@ -75,13 +77,28 @@ of Date transport support. Request the compatible Core metadata deployment rathe
 than guessing based on formats or retrying the write. No automatic POST retry is
 added.
 
-Delete exclusion is a helper-side eligibility restriction, **not** an additional
-server authorization layer or globally restricted OAuth token scope. The server
-keeps its existing permissions and browser behavior. Never retrieve the token or
-construct requests outside the helper to bypass this restriction. For contact
-updates, creating a company through `contactCompanyName` is not supported: use an
-existing company with `useExisting: true`. Existing Embrace Agent proposal policies
-are unaffected.
+### Deletes archive the record
+
+Deleting is an atomic archive, not erasure: the record moves to an archive table
+with who/when audit (`archivedBy`/`archivedAt`), an ARCHIVED audit entry is
+written, and Deleted webhooks fire after the commit. Normal lists and searches
+no longer show the record. There is no user-facing restore yet — restoration
+requires an administrator or data operator. A repeat delete of the same record
+returns not-found.
+
+**Confirmation protocol — before dispatching any delete:** state the exact
+record type, record name and record ID in the conversation, and require the
+user's explicit confirmation. Never batch-delete, never automatically retry a
+delete, and never use a delete as rollback or cleanup unless the user explicitly
+instructed it.
+
+Server RBAC and the atomic archive transaction are the delete boundary. There is
+no helper-side delete gate, additional server authorization layer or
+delete-restricted OAuth token scope; the server keeps its existing permissions
+and browser behavior. Never retrieve the token or construct requests outside the
+helper to bypass this lane. For contact updates, creating a company through
+`contactCompanyName` is not supported: use an existing company with
+`useExisting: true`. Existing Embrace Agent proposal policies are unaffected.
 
 ## 4. Verify results and handle failures
 
@@ -96,5 +113,5 @@ are unaffected.
 - `FORBIDDEN` is a permission boundary. Validation/conflict errors require fixing
   the original request, not guessing inputs through repeated writes.
 
-Never invoke deletes as rollback or cleanup through this Mod. Test-fixture cleanup
-is separately scoped operator work, not a supported customer mutation.
+Never use a delete as rollback, cleanup or fixture removal unless the user
+explicitly instructed it through the confirmation protocol.

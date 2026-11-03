@@ -238,19 +238,25 @@ describe('CLI Date input transport', () => {
       expect(count).toBe(2);
     });
   }
-  test('delete metadata containing Dates never reaches POST', async () => {
-    let count = 0;
+  test('delete metadata containing Dates dispatches the same Date-marked POST', async () => {
+    const requests: string[] = [];
     const name = 'v3.fixture.deleteDates';
-    setFetchForTests(async (_, init) => {
-      count++;
-      expect(init?.method).toBe('GET');
-      return reply(metadata(name, 'mutation'));
+    setFetchForTests(async (url, init) => {
+      const parsed = new URL(String(url));
+      requests.push(parsed.pathname);
+      if (parsed.pathname === `/trpc/${DESCRIBE_MUTATION}`) {
+        expect(init?.method).toBe('GET');
+        return reply(metadata(name, 'mutation'));
+      }
+      expect(init?.method).toBe('POST');
+      expect(parsed.pathname).toBe(`/trpc/${name}`);
+      const envelope = JSON.parse(String(init?.body));
+      expect(envelope.meta.values).toEqual(values);
+      return reply({ archived: true });
     });
     const result = await run('mutate', name);
-    expect(result.code).toBe(1);
-    expect(result.err.join()).toContain('not-dispatched');
-    expect(result.err.join()).toContain('Deleting records');
-    expect(count).toBe(1);
+    expect(result.code).toBe(0);
+    expect(requests).toEqual([`/trpc/${DESCRIBE_MUTATION}`, `/trpc/${name}`]);
   });
   test('metadata calls do not recursively describe', async () => {
     let count = 0;

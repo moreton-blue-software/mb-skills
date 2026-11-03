@@ -1,6 +1,6 @@
 {
   "name": "embrace-claude-mod",
-  "description": "Embrace Claude Mod: sign in, query records and run reviewed non-delete writes on compatible instances",
+  "description": "Embrace Claude Mod: sign in, query records and run reviewed writes, including confirmation-gated archived deletes, on compatible instances",
   "license": "UNLICENSED",
   "types": "./types/index.d.ts",
   "userConfig": {
