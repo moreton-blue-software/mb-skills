@@ -1,3 +1,7 @@
 {
-  "extends": "./.claude-plugin/types/tsconfig.json"
+  "extends": "./.claude-plugin/types/tsconfig.json",
+  "compilerOptions": {
+    "typeRoots": ["./.claude-plugin/types", "./node_modules/@types"],
+    "types": ["claude-code", "claude-code-tools", "claude-code-mcp", "bun"]
+  }
 }

@@ -191,14 +191,21 @@ and [MUTATING.md](MUTATING.md) for the deployed-backend requirement and limits.
 
 ## Development
 
+Run these commands from this plugin directory. The local dev dependencies supply
+TypeScript and the official Bun declarations; the committed Bun lockfile pins
+that toolchain. Load the plugin once to generate its engine declarations. The
+owning tsconfig includes both declaration sets without changing the generated
+config or excluding Bun tests. No development install is needed to run the helper.
+
 ```
+bun install --frozen-lockfile  # scoped development toolchain only
 bun test helper hooks/*.test.ts  # excludes engine-native *.test.tsx
 # Optional real-library contract checks, using existing dependencies only:
 MOD_CONTRACT_MODULES=/path/to/existing/node_modules bun test helper/date-input.test.ts
 # Also verify schemas from a compatible local Core source checkout:
 MOD_CONTRACT_MODULES=/path/to/core/node_modules MOD_CORE_SOURCE=/path/to/core bun test helper/date-input.test.ts
 claude plugin validate .
-bunx tsc -p . --noEmit   # after loading the plugin once to generate engine types
+bunx --no-install tsc -p . --noEmit   # after loading the plugin once to generate engine types
 ```
 
 ## Stable login identity
