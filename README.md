@@ -52,7 +52,9 @@ Date-input transport requires a compatible Core deployment exposing
 `"x-superjson":"Date"` in runtime schemas; older unmarked contracts keep plain JSON
 and may reject strict Date inputs. A topic-branch checkout does not update the
 marketplace release. Installed marketplace updates follow the tracked branch;
-update the marketplace and plugin, then restart or reload plugins.
+update the marketplace and plugin, then restart or reload plugins. The status-line
+fix reconciles helper session metadata in the background and clears stale identity
+after external helper logout; it does not change token custody or authorize API calls.
 
 ## Use Without Installing
 

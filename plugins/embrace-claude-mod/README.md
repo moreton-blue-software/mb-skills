@@ -89,6 +89,14 @@ terminal renderer, mouse clicks on the frame's × may not be delivered; focus th
 pane with Ctrl+X then Tab, then press `x`, or use Ctrl+X then X. The native × was
 pointer-verified in the fullscreen renderer (`CLAUDE_CODE_NO_FLICKER=1`).
 
+The pinned identity is refreshed from helper `status --json` at session start,
+when opening connect, and five seconds after each background check completes.
+External helper logout or removal of its stored session clears a stale line on
+the next check (or shows another remaining eligible session). An unavailable
+helper also clears the unverified line. This is local session metadata, not an
+API authorization check; it neither refreshes tokens nor changes the active
+origin. Background checks are serialized and stop with the Claude session.
+
 ## Agent instructions for CRM, Projects, and other records
 
 The plugin adds a short instruction section to Claude's session prompt pointing

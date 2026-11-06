@@ -197,16 +197,17 @@ async function switchInstance($: EngineInterface, session: SessionRow): Promise<
   return `Switched to ${session.origin}${session.email ? ` (signed in as ${session.email})` : ''}.${expiryNote}`;
 }
 
-async function refreshStatusLine($: EngineInterface, options: PluginOptions): Promise<void> {
+async function refreshStatusLine($: EngineInterface, options: PluginOptions, current = () => true): Promise<void> {
   try {
     const [sessions, activeOrigin] = await Promise.all([
       listSessions($, options),
       $.store.get(ORIGIN_STORE_KEY),
     ]);
     const session = pickStatusSession(sessions, activeOrigin);
-    if (session) $.ui.status(`embrace: ${session.email ?? 'signed in'} @ ${hostOf(session.origin)}`);
+    if (current()) $.ui.status(session ? `embrace: ${session.email ?? 'signed in'} @ ${hostOf(session.origin)}` : undefined);
   } catch {
-    // Best-effort only; the status line stays unset.
+    // An unverified identity must not remain pinned after a failed refresh.
+    if (current()) $.ui.status(undefined);
   }
 }
 
@@ -223,9 +224,11 @@ async function runConnect(
 ): Promise<{ text: string }> {
   const note = aliased ? 'Note: /embrace-login still works; /embrace-connect is the current command.\n' : '';
   let requested = args.trim();
+  const sessions = await listSessions($, options);
+  const activeOrigin = await $.store.get(ORIGIN_STORE_KEY);
+  const session = pickStatusSession(sessions, activeOrigin);
+  $.ui.status(session ? `embrace: ${session.email ?? 'signed in'} @ ${hostOf(session.origin)}` : undefined);
   if (!requested) {
-    const sessions = await listSessions($, options);
-    const activeOrigin = await $.store.get(ORIGIN_STORE_KEY);
     if (sessions.length > 0) {
       let answer: string;
       try {
@@ -265,7 +268,21 @@ async function runConnect(
   return { text: note + message };
 }
 
+interface StatusRefresh {
+  timer?: ReturnType<EngineInterface['clock']['after']>;
+  generation: number;
+  stopped: boolean;
+}
+
+async function pollStatus($: EngineInterface, options: PluginOptions, status: StatusRefresh): Promise<void> {
+  const generation = ++status.generation;
+  await refreshStatusLine($, options, () => !status.stopped && generation === status.generation);
+  if (!status.stopped) status.timer = $.clock.after(5000, () => { void pollStatus($, options, status); });
+}
+
 export const register: Register = (on, options) => {
+  const status: StatusRefresh = { generation: 0, stopped: true };
+
   on('prompt.compose', async ($, e, next) => {
     const result = await next(e);
     return { ...result, sections: appendQueryGuidance(result.sections, $.plugin.root) };
@@ -282,12 +299,29 @@ export const register: Register = (on, options) => {
       description: 'Alias of /embrace-connect (sign in to an Embrace instance)',
       argumentHint: '[origin]',
     });
-    void refreshStatusLine($, options);
+    status.timer?.cancel();
+    status.stopped = false;
+    await pollStatus($, options, status);
     return next(e);
   });
 
-  on('command.run', { command: 'embrace-connect' }, async ($, e) => runConnect($, options, e.args, false));
-  on('command.run', { command: 'embrace-login' }, async ($, e) => runConnect($, options, e.args, true));
+  on('session.end', ($, e, next) => {
+    // /clear keeps the process alive without another session.start event.
+    if (e.reason === 'clear') return next(e);
+    status.stopped = true;
+    status.generation++;
+    status.timer?.cancel();
+    return next(e);
+  });
+
+  on('command.run', { command: 'embrace-connect' }, async ($, e) => {
+    status.generation++;
+    return runConnect($, options, e.args, false);
+  });
+  on('command.run', { command: 'embrace-login' }, async ($, e) => {
+    status.generation++;
+    return runConnect($, options, e.args, true);
+  });
 
   on('ui.render', { component: 'Pane', requestId: LOGIN_PANE }, async ($, e, next) => {
     // Input exists on terminal, desktop and vscode; mobile cannot paste a code.
@@ -326,7 +360,10 @@ export const register: Register = (on, options) => {
               label="One-time code"
               placeholder="paste the code here"
               submitLabel="sign in"
-              onSubmit={value => void completeLogin($, options, value)}
+              onSubmit={value => {
+                status.generation++;
+                void completeLogin($, options, value).finally(() => { status.generation++; });
+              }}
             />
           </Box>
         )}

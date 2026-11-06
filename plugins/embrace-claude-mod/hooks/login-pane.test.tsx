@@ -1,7 +1,7 @@
 // Engine-native tests for pane dismissal and connect/switch; helper calls are
 // mocked, never live. Usage: claude plugin test <isolated engine-test fixture
 // containing these hooks>.
-import { expect, test } from 'claude-code/testing';
+import { expect, mock, test } from 'claude-code/testing';
 
 const pane = {
   plugin: 'embrace-claude-mod', component: 'Pane', requestId: 'embrace-login',
@@ -16,7 +16,7 @@ const processResult = (stdout: string, exitCode = 0) => ({
 test('connect with no argument switches to a listed instance without starting a login', async ($, on) => {
   const calls: string[][] = [];
   const stored: [string, unknown][] = [];
-  const statusTexts: string[] = [];
+  const statusTexts: (string | undefined)[] = [];
   on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }));
   on('process.run', (_, e) => {
     calls.push([...e.argv]);
@@ -40,7 +40,7 @@ test('connect with no argument switches to a listed instance without starting a 
   expect(calls).toHaveLength(1); // status --json only: no login/--url-only, no token call.
   expect(calls[0]).toContain('status');
   expect(stored).toEqual([['embrace-cli:origin', 'https://b.example.test']]);
-  expect(statusTexts[0]).toContain('b.example.test');
+  expect(statusTexts.at(-1)).toContain('b.example.test');
   expect(JSON.stringify(result)).toContain('refresh on the next request');
 });
 
@@ -67,6 +67,7 @@ test('connect with no sessions falls back to the origin picker and starts the lo
 test('login opens with Escape dismissal and explicit close never signs out', async ($, on) => {
   const calls: string[][] = [];
   let closed = false;
+  on('store.get', () => ({ value: undefined }));
   on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }));
   on('process.run', (_, e) => {
     calls.push([...e.argv]);
@@ -83,13 +84,15 @@ test('login opens with Escape dismissal and explicit close never signs out', asy
   expect((await ui.find({ key: 'close-login' }))?.text).toBe('Close');
   await ui.press({ key: 'close-login' });
   expect(closed).toBe(true);
-  expect(calls).toHaveLength(1);
-  expect(calls[0]).toContain('--url-only');
+  expect(calls).toHaveLength(2); // Status reconciliation, then login; closing makes no helper call.
+  expect(calls[0]).toContain('status');
+  expect(calls[1]).toContain('--url-only');
   await ui.unmount();
 });
 
 test('successful code submission closes the pane after setting signed-in status', async ($, on) => {
   let closed = false;
+  on('store.get', () => ({ value: undefined }));
   on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }));
   on('process.run', (_, e) => processResult(JSON.stringify(e.argv.includes('--complete')
     ? { email: 'fixture@example.test' } : { authorizeUrl: `${origin}/authorize?dummy=public` })));
@@ -106,8 +109,61 @@ test('successful code submission closes the pane after setting signed-in status'
   await ui.unmount();
 });
 
+test('opening connect clears a stale status when external logout removed every session', async ($, on) => {
+  const statuses: (string | undefined)[] = [];
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }));
+  on('process.run', () => processResult(JSON.stringify({ sessions: [] })));
+  on('store.get', () => ({ value: origin }));
+  on('ui.status', (_, e) => { statuses.push(e.text); return { value: undefined }; });
+  on('tool.call', { tool: 'AskUserQuestion' }, (_, e) => ({
+    result: { questions: e.questions, answers: {} },
+  }));
+  await $.command.run({ command: 'embrace-connect', args: '',
+    origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } });
+  expect(statuses).toContain(undefined);
+});
+
+test('idle metadata refresh clears external logout and stops at session end', async ($, on) => {
+  const clock = mock.clock(on);
+  mock.store(on, { 'embrace-cli:origin': origin });
+  let sessions = [{ origin, email: 'fixture@example.test', accessTokenValid: true }];
+  const statuses: (string | undefined)[] = [];
+  let statusCalls = 0;
+  let helperFails = false;
+  on('session.start', (_, e) => ({ cwd: e.cwd }));
+  on('session.end', () => ({ sessionId: 'fixture-session' }));
+  on('command.register', (_, e) => ({ value: { command: e.name } }));
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }));
+  on('process.run', (_, e) => {
+    expect(e.argv.slice(-2)).toEqual(['status', '--json']);
+    statusCalls++;
+    return processResult(JSON.stringify({ sessions }), helperFails ? 1 : 0);
+  });
+  on('ui.status', (_, e) => { statuses.push(e.text); return { value: undefined }; });
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true });
+  expect(statuses.at(-1)).toContain('fixture@example.test');
+  sessions = [{ origin: 'https://other.example.test', email: 'other@example.test', accessTokenValid: true }];
+  await clock.advance(5000);
+  expect(statuses.at(-1)).toContain('other@example.test');
+  await $.session.end({ reason: 'clear', sessionId: 'fixture-session', resume: { id: 'fixture-session' } });
+  sessions = [];
+  await clock.advance(5000);
+  expect(statuses.at(-1)).toBeUndefined();
+  expect(statusCalls).toBe(3);
+  sessions = [{ origin, email: 'fixture@example.test', accessTokenValid: false }];
+  await clock.advance(5000);
+  expect(statuses.at(-1)).toContain('fixture@example.test'); // Expired access token retains active refreshable session.
+  helperFails = true;
+  await clock.advance(5000);
+  expect(statuses.at(-1)).toBeUndefined();
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'fixture-session', resume: { id: 'fixture-session' } });
+  await clock.advance(10000);
+  expect(statusCalls).toBe(5);
+});
+
 test('failed code exchange leaves the pane available to retry or close', async ($, on) => {
   let closed = false;
+  on('store.get', () => ({ value: undefined }));
   on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }));
   on('process.run', (_, e) => e.argv.includes('--complete')
     ? processResult(JSON.stringify({ error: 'rejected' }), 1)

@@ -28,7 +28,9 @@ already-connected instances, the user runs `/embrace-connect` and picks one;
 switching changes the active instance and status line, never the credentials.
 Never read token/pending-login files, collect a password in chat,
 inspect browser cookies, or construct Authorization headers yourself. The helper
-owns refresh and all credential handling.
+owns refresh and all credential handling. The status line periodically reconciles
+helper session metadata and clears after external logout; it is not an API
+identity or permission check. Use `status --json` for a current local snapshot.
 
 For Core instances supporting this plugin, the verified identity query is:
 
