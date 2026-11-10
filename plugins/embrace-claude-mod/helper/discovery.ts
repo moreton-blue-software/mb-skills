@@ -18,8 +18,8 @@ export function discoveryRequest(args: {
   const type = args.type ?? 'query';
   if (type !== 'query' && type !== 'mutation') throw new Error('type must be query or mutation');
   if (args.command === 'describe') {
-    if (!args.name || !/^v3\.[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)+$/.test(args.name) || args.name.length > 200) {
-      throw new Error('describe requires a valid v3 query name (at most 200 characters)');
+    if (!args.name || /[^A-Za-z0-9_.]/.test(args.name) || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(args.name) || args.name.length > 200) {
+      throw new Error('describe requires a valid dotted procedure name (at most 200 characters)');
     }
     return { procedure: type === 'mutation' ? DESCRIBE_MUTATION : DESCRIBE_QUERY, inputJson: JSON.stringify({ name: args.name }) };
   }

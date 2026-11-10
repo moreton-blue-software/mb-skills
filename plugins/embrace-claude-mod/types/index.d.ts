@@ -1,6 +1,8 @@
 // State contract for Embrace Claude Mod: the values it keeps in $.state.
 // Schema-guided Date input transport lives solely in the helper. It adds no
 // plugin state or token access; see QUERYING.md and MUTATING.md for its contract.
+// Fresh v2 connection detection also stays in the helper: no persisted metadata,
+// instance identity or plugin-state fields. V2 queries are GET-only; writes denied.
 
 export type EmbraceLoginPhase = 'idle' | 'awaiting-code' | 'completing' | 'signed-in' | 'error';
 

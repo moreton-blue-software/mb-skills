@@ -104,7 +104,7 @@ permissions. No business query name, filter shape, or record ID should be guesse
 
 ### New and future procedures
 
-The helper already accepts any valid `v3.*` name and uses the same GET-only
+On v3, the helper accepts any valid `v3.*` name and uses the same GET-only
 transport; new query procedures do not require adding a plugin allowlist.
 On Core versions supporting discovery, use:
 
@@ -126,6 +126,30 @@ New authorized query names and parser contracts come from the instance's deploye
 router, without another plugin release. Older Core versions may not implement
 discovery: report that requirement and request a matching operator-supplied
 contract instead of guessing. Customers need no private GitHub access.
+
+## V2 queries
+
+The helper also supports compatible Embrace v2 backends advertising the public
+same-origin `/api/auth/.well-known/embrace-connection` document. Detection sends
+no cookies or credentials and refuses redirects. Only HTTP 404 preserves legacy
+v3 behavior; malformed metadata, issuer/API-origin disagreement and every other
+failure stop with a fixed error. The issuer must exactly match `<origin>/api/auth`.
+Metadata is fetched fresh, never cached or added to session/token storage.
+
+```text
+bun helper/cli.ts status --origin <origin> --json
+bun helper/cli.ts call --origin <origin> core.auth.getUserSession '{}'
+```
+
+Explicit-origin JSON status reports verified v2 capabilities, even without a
+session; `call` still requires sign-in. V2 queries use the advertised same-origin
+API base plus the strict dotted procedure name, without inserting `/trpc`, and
+single-request SuperJSON envelopes over GET. `{}` is required by this identity
+query's contract. Other names/inputs need a matching operator-supplied contract.
+V2 `discover` and `describe` (both types) explain that discovery is unavailable
+and name the initial procedure when advertised; they never call v3 discovery.
+V2 mutations are refused, and v2 input has no inferred Date conversion. No query
+is retried with POST. See [QUERYING.md](QUERYING.md) for exact boundaries.
 
 ## Supported writes
 
@@ -155,7 +179,7 @@ the GET-only `call` lane remain unchanged.
 
 ## Date input transport
 
-`call` with supplied input fetches a fresh query description; `mutate` reuses its
+On v3, `call` with supplied input fetches a fresh query description; `mutate` reuses its
 required fresh mutation description. Only schema nodes marked
 `"x-superjson":"Date"` encode ISO timestamp strings as SuperJSON Dates, including
 nested arrays/objects and supported schema unions/wrappers. Use real calendar

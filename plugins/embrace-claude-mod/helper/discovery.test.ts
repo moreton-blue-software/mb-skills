@@ -1,7 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { discoveryRequest, DESCRIBE_QUERY, LIST_QUERIES } from './discovery';
 import { parseCliArgs, runCommand } from './cli';
-import { setFetchForTests } from './fetch';
+import { setFetchForTests as setRawFetchForTests } from './fetch';
+import { CONNECTION_PATH } from './connection';
+
+// Keep authenticated v3 request assertions behind an explicit 404 capability probe.
+function setFetchForTests(stub?: Parameters<typeof setRawFetchForTests>[0]) {
+  setRawFetchForTests(stub && ((url, init) => String(url).endsWith(CONNECTION_PATH)
+    ? Promise.resolve(new Response(null, { status: 404 })) : stub(url, init)));
+}
 
 const ORIGIN = 'https://example.test';
 afterEach(() => setFetchForTests());

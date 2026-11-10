@@ -45,6 +45,18 @@ describe('installed query instructions', () => {
     expect(guide).toContain('MUTATING.md');
   });
 
+  test('explains v2 capabilities and fail-closed detection without reusing proxy writes', () => {
+    const text = appendQueryGuidance([], '/plugin')[0]!.text;
+    expect(text).toContain('status --origin <origin> --json');
+    expect(text).toContain('core.auth.getUserSession with required input {}');
+    expect(text).toContain('v2 discovery/describe and mutations are unavailable');
+    expect(text).toContain('never request v3 discovery on v2');
+    expect(text).toContain('Only a 404 connection document selects legacy v3');
+    expect(guide).toContain('GET `<api.baseUrl>/<procedure>`');
+    expect(guide).toContain('V2 inputs stay plain JSON');
+    expect(guide).toContain('a direct POST or another identity');
+  });
+
   test('replaces its own section instead of duplicating instructions', () => {
     const first = appendQueryGuidance([], '/first');
     const second = appendQueryGuidance(first, '/second');

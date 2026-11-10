@@ -4,6 +4,7 @@
 
 import { DESCRIBE_QUERY, DESCRIBE_MUTATION, LIST_QUERIES, LIST_MUTATIONS } from './discovery';
 import { httpFetch } from './fetch';
+import { V3_BACKEND, unavailableDiscovery, type Backend } from './connection';
 import { deserializeEnvelope, serializeInput } from './superjson-lite';
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -17,8 +18,14 @@ export interface TrpcCallResult {
   data?: unknown;
 }
 
-/** Validate a dotted v3 procedure name (for example `v3.agent.listThreads`). */
-export function assertProcedureName(procedure: string): void {
+/** Validate names for the selected backend; preserve the legacy v3 grammar. */
+export function assertProcedureName(procedure: string, backend: Backend = V3_BACKEND): void {
+  if (backend.product === 'embrace-v2') {
+    if (procedure.length > 200 || /[^A-Za-z0-9_.]/.test(procedure) || !/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+$/.test(procedure)) {
+      throw new Error('v2 procedure must be a dotted name using letters, digits or underscores (at most 200 characters)');
+    }
+    return;
+  }
   if (!/^v3\.[A-Za-z0-9]+(?:\.[A-Za-z0-9]+)+$/.test(procedure)) {
     throw new Error('procedure must look like v3.<module>.<name>');
   }
@@ -30,13 +37,20 @@ export async function callProcedure(args: {
   input?: unknown;
   accessToken: string;
   inputSchema?: unknown;
+  backend?: Backend;
 }): Promise<TrpcCallResult> {
-  assertProcedureName(args.procedure);
+  const backend = args.backend ?? V3_BACKEND;
+  assertProcedureName(args.procedure, backend);
+  if (backend.product === 'embrace-v2' && [DESCRIBE_QUERY, DESCRIBE_MUTATION, LIST_QUERIES, LIST_MUTATIONS].includes(args.procedure)) {
+    throw new Error(unavailableDiscovery(backend));
+  }
   const envelope = JSON.stringify(serializeInput(args.input, args.inputSchema));
-  const url = `${args.origin}/trpc/${args.procedure}?input=${encodeURIComponent(envelope)}`;
+  const baseUrl = backend.product === 'embrace-v2' ? backend.baseUrl : `${args.origin}/trpc`;
+  const url = `${baseUrl}/${args.procedure}?input=${encodeURIComponent(envelope)}`;
   const response = await httpFetch(url, {
     method: 'GET',
     headers: { Authorization: `Bearer ${args.accessToken}` },
+    ...(backend.product === 'embrace-v2' ? { redirect: 'error' as const, credentials: 'omit' as const } : {}),
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   let payload: unknown;
@@ -63,9 +77,10 @@ export async function callProcedure(args: {
 
 /** Fresh schema for CLI query inputs; metadata requests never describe themselves. */
 export async function callQuery(args: {
-  origin: string; procedure: string; input?: unknown; accessToken: string;
+  origin: string; procedure: string; input?: unknown; accessToken: string; backend?: Backend;
 }): Promise<TrpcCallResult> {
-  assertProcedureName(args.procedure);
+  assertProcedureName(args.procedure, args.backend);
+  if (args.backend?.product === 'embrace-v2') return callProcedure(args);
   if (args.input === undefined || [DESCRIBE_QUERY, DESCRIBE_MUTATION, LIST_QUERIES, LIST_MUTATIONS].includes(args.procedure)) {
     return callProcedure(args);
   }

@@ -19,6 +19,15 @@ Use this skill when the user asks to:
 
 Do not use this skill for direct Cognito auth, direct upstream infrastructure credentials, direct database access, or core-v3 MB3 tRPC calls.
 
+## Separate Direct Mod Query Lane
+
+This proxy contract is separate from Embrace Claude Mod. The Mod now supports
+GET-only queries on v2 backends with verified same-origin connection metadata;
+its initial advertised query is `core.auth.getUserSession` with required `{}`
+input. The Mod has no v2 procedure discovery/describe or mutation lane. Never
+reuse this skill's proxy token, POST actions or schema endpoints to bypass a Mod
+refusal. See the Mod's [query guide](../../plugins/embrace-claude-mod/QUERYING.md).
+
 ## Required Environment
 
 The caller must provide both variables:

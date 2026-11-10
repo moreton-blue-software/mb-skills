@@ -5,8 +5,15 @@ import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { serializeInput } from './superjson-lite';
 import { parseCliArgs, runCommand } from './cli';
-import { setFetchForTests } from './fetch';
+import { setFetchForTests as setRawFetchForTests } from './fetch';
+import { CONNECTION_PATH } from './connection';
 import { DESCRIBE_QUERY, DESCRIBE_MUTATION, LIST_QUERIES, LIST_MUTATIONS } from './discovery';
+
+// Keep authenticated v3 request assertions behind an explicit 404 capability probe.
+function setFetchForTests(stub?: Parameters<typeof setRawFetchForTests>[0]) {
+  setRawFetchForTests(stub && ((url, init) => String(url).endsWith(CONNECTION_PATH)
+    ? Promise.resolve(new Response(null, { status: 404 })) : stub(url, init)));
+}
 
 const DATE = { type: 'string', format: 'date-time', 'x-superjson': 'Date' };
 const STRING = { type: 'string', format: 'date-time' };

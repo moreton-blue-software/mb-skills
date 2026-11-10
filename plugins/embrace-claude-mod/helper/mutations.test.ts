@@ -2,8 +2,15 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { parseCliArgs, runCommand } from './cli';
 import { DESCRIBE_MUTATION, LIST_MUTATIONS } from './discovery';
-import { setFetchForTests } from './fetch';
+import { setFetchForTests as setRawFetchForTests } from './fetch';
+import { CONNECTION_PATH } from './connection';
 import { executeReviewedMutation } from './mutations';
+
+// Keep authenticated v3 request assertions behind an explicit 404 capability probe.
+function setFetchForTests(stub?: Parameters<typeof setRawFetchForTests>[0]) {
+  setRawFetchForTests(stub && ((url, init) => String(url).endsWith(CONNECTION_PATH)
+    ? Promise.resolve(new Response(null, { status: 404 })) : stub(url, init)));
+}
 
 const ORIGIN = 'http://localhost:5999';
 const NAME = 'v3.crm.company.createCompany';
@@ -223,6 +230,7 @@ describe('direct mutation transport', () => {
     expect(count).toBe(1);
   });
   test('status uses the injected clock and correctly reports expiry', async () => {
+    setFetchForTests(async () => { throw new Error('Unexpected authenticated request'); });
     const out: string[] = [];
     const context = { tokenStore, now: () => NOW, stdout: (text: string) => out.push(text) };
     expect(await runCommand(parseCliArgs(['status', '--origin', ORIGIN, '--json']), context)).toBe(0);
