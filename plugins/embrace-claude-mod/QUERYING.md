@@ -38,6 +38,41 @@ bun <absolute-helper-path> call --origin <origin> v3.common.topBar.getCurrentUse
 
 Treat this as an identity check only, not proof of permission for CRM or Projects.
 
+### V2 connection and identity queries
+
+For an explicit origin, `status --origin <origin> --json` checks the public
+same-origin `/api/auth/.well-known/embrace-connection` document without cookies,
+credentials or redirects. `call`, `discover`, `describe` and `mutate` perform the
+same fresh check. Only HTTP 404 selects the existing v3 behavior. Malformed,
+inconsistent, redirected or otherwise inaccessible metadata stops the command
+with a fixed connection-verification error; it never silently selects v3.
+The issuer must be exactly `<origin>/api/auth`, and the advertised tRPC base URL
+must share that origin. No connection document or instance ID is persisted.
+
+A verified `product: "embrace-v2"` selects v2. Explicit-origin JSON status adds
+`backend.product`, `procedureDiscovery: false` and, when advertised,
+`initialAllowedProcedure`. Status without an origin remains a local session list.
+The initial query, when advertised and authorized, is:
+
+```text
+bun <absolute-helper-path> call --origin <origin> core.auth.getUserSession '{}'
+```
+
+The empty object is this query's required input, not a generic fallback.
+V2 uses GET `<api.baseUrl>/<procedure>` with the same single-request SuperJSON
+input/result envelopes; it does not add `/trpc`. Names contain dot-separated
+letters, digits or underscores, with no empty segments and at most 200 characters.
+The backend remains authoritative for query eligibility and permissions.
+
+V2 currently advertises no procedure discovery. Both query/mutation `discover`
+and `describe`, and direct calls to the four v3 discovery procedures, explain
+that limitation and name the advertised initial procedure instead of requesting
+`v3.discovery.*`. Obtain a matching operator-supplied contract for other queries;
+this document does not grant access or provide a procedure catalogue.
+V2 inputs stay plain JSON without schema-based Date inference. V2 mutations
+are unsupported and refused before refresh or dispatch; never use the proxy
+skill, a direct POST or another identity to work around that refusal.
+
 ## 2. Obtain a current query contract before business queries
 
 You need all of:
@@ -45,11 +80,11 @@ You need all of:
 - The exact dotted procedure name and `type: "query"`.
 - Its input contract, including whether input is omitted, optional, or required;
   required fields, accepted filters, enum values, pagination, and sorting.
-- Provenance showing the contract belongs to this Core API and the deployed
-  version of the chosen instance, not another tenant, a v2 API, or an old example.
+- Provenance showing the contract belongs to the detected API product and deployed
+  version of the chosen instance, not another tenant, product, or old example.
 - Enough documented response semantics to interpret results and pagination.
 
-Use the authenticated discovery commands on instances with the discovery API:
+For v3, use the authenticated discovery commands on instances with the discovery API:
 
 ```text
 bun <absolute-helper-path> discover --origin <origin> --search project --limit 20
@@ -96,7 +131,7 @@ version provenance are separate operator responsibilities.
 
 The repository's `embrace-v2-trpc-proxy` skill describes a different API with
 proxy-token authentication. Its POST actions and schema endpoints must not be
-used with this OIDC/Core v3 helper.
+used with this helper, including its direct v2 query lane.
 
 ## 3. Select the right query and shape its input
 
@@ -132,7 +167,7 @@ bun <absolute-helper-path> call --origin <origin> <verified-query-name> '<input-
 
 Omit the final argument for a contract with void input. Supply ordinary JSON for
 object input; the helper handles superjson, Bearer authentication and refresh.
-For supplied input, `call` fetches a fresh `describeQuery` contract (metadata
+For supplied v3 input, `call` fetches a fresh `describeQuery` contract (metadata
 endpoints themselves are not described). The helper encodes an ISO string as a
 SuperJSON Date **only** where the schema says `"x-superjson":"Date"`;
 `format: "date-time"` alone and date-looking strings stay strings. Supply a real calendar
@@ -157,8 +192,8 @@ Explicit user-requested writes use the separate `mutate` command and discovered
 mutation endpoints described in [MUTATING.md](MUTATING.md), never query fallback. Authentication itself still needs
 OAuth token/refresh/revoke POST requests, handled by the helper.
 
-The helper accepts any syntactically valid v3 query name; it has no module
-allowlist. GET-only is a client safety restriction, not a server-enforced
+The helper accepts syntactically valid query names for the detected backend;
+v3 still requires `v3.<module>.<name>`. It has no module allowlist. GET-only is a client safety restriction, not a server-enforced
 read-only OAuth scope. Do not attempt to bypass it with the stored token.
 
 For large inputs that exceed URL or transport limits, report the limitation;
@@ -187,7 +222,7 @@ come from the deployed router. New registered queries become discoverable after
 that instance deploys them, subject to authorization and schema support. Core
 owns API meaning; the plugin never copies a private router or procedure list.
 
-Always follow index → select query → read its contract → build bounded input →
+For v3 discovery, follow index → select query → read its contract → build bounded input →
 execute. Refresh after deployment changes or missing/invalid contracts, retaining
 query-only transport and no-guessed-schema rules. New input-dependent permission modes or
 unsupported schema kinds may require a Core discovery update; automatic naming

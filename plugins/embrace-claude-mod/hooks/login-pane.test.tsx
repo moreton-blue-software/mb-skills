@@ -33,7 +33,7 @@ test('connect with no argument switches to a listed instance without starting a 
   });
   on('store.get', () => ({ value: undefined }));
   on('store.set', (_, e) => { stored.push([e.key, e.value]); return { value: undefined }; });
-  on('ui.status', (_, e) => { statusTexts.push(e.text); return { value: undefined }; });
+  on('ui.status', (_, e) => { statusTexts.push(e.text ?? ''); return { value: undefined }; });
   on('ui.toast', () => ({ value: undefined }));
   const result = await $.command.run({ command: 'embrace-connect', args: '',
     origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } });

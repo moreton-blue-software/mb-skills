@@ -47,7 +47,8 @@ import {
   type PendingLoginStore,
   type TokenStore,
 } from './token-store';
-import { callQuery } from './trpc';
+import { assertProcedureName, callQuery } from './trpc';
+import { detectBackend, unavailableDiscovery } from './connection';
 import { discoveryRequest, LIST_QUERIES, DESCRIBE_QUERY, LIST_MUTATIONS, DESCRIBE_MUTATION, type OperationType } from './discovery';
 import { executeReviewedMutation } from './mutations';
 
@@ -271,6 +272,18 @@ async function completeLogin(origin: string, pasted: string, flow: FlowContext):
 }
 
 async function callFlow(origin: string, args: CliArgs, flow: FlowContext): Promise<number> {
+  const backend = await detectBackend(origin);
+  if (backend.product === 'embrace-v2') {
+    if (args.command === 'mutate') throw new CliError('V2 mutations are not supported; no write was dispatched.');
+    if (args.command === 'discover' || args.command === 'describe'
+      || [LIST_QUERIES, DESCRIBE_QUERY, LIST_MUTATIONS, DESCRIBE_MUTATION].includes(args.procedure!)) {
+      throw new CliError(unavailableDiscovery(backend));
+    }
+  }
+  if (args.command === 'describe') {
+    assertProcedureName((JSON.parse(args.inputJson!) as { name: string }).name, backend);
+  }
+  assertProcedureName(args.procedure!, backend);
   const stored = await flow.tokenStore.get(origin);
   if (!stored) {
     throw new CliError(`not signed in for ${origin}`, 2, `run: bun helper/cli.ts login --origin ${origin}`);
@@ -289,7 +302,7 @@ async function callFlow(origin: string, args: CliArgs, flow: FlowContext): Promi
     flow.print(result.data);
     return 0;
   }
-  const result = await callQuery({ origin, procedure: args.procedure!, input, accessToken });
+  const result = await callQuery({ origin, procedure: args.procedure!, input, accessToken, backend });
   if (!result.ok) {
     flow.fail({
       error: `procedure ${args.procedure} failed (${result.errorCode ?? result.httpStatus})`,
@@ -344,6 +357,7 @@ async function logoutFlow(origin: string, args: CliArgs, flow: FlowContext): Pro
 }
 
 async function statusFlow(origin: string | undefined, args: CliArgs, flow: FlowContext): Promise<number> {
+  const backend = origin === undefined ? undefined : await detectBackend(origin);
   const tokens = origin === undefined ? await flow.tokenStore.list() : [await flow.tokenStore.get(origin)].filter(
     (token): token is NonNullable<typeof token> => token !== null,
   );
@@ -353,7 +367,10 @@ async function statusFlow(origin: string | undefined, args: CliArgs, flow: FlowC
     accessTokenValid: !isTokenExpired(token, flow.now()),
   }));
   if (args.json) {
-    flow.print({ sessions });
+    flow.print({ sessions, ...(backend?.product === 'embrace-v2' ? { backend: {
+      product: backend.product, procedureDiscovery: backend.procedureDiscovery,
+      ...(backend.initialAllowedProcedure ? { initialAllowedProcedure: backend.initialAllowedProcedure } : {}),
+    } } : {}) });
     return 0;
   }
   const write = flow.context?.stdout ?? console.log;

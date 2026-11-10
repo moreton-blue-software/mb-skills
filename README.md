@@ -123,7 +123,13 @@ Confirm adding the marketplace and select an installation scope. Run
 `/embrace-login https://<your-embrace-instance>` to sign in through your browser.
 The helper keeps credentials outside the mod sandbox; queries use GET, and
 reviewed mutations — including confirmation-gated archived deletes — POST
-directly to discovered tRPC procedures.
+directly to discovered v3 tRPC procedures. Compatible v2 backends are detected
+from a verified same-origin connection document and support GET-only queries,
+including `core.auth.getUserSession` with `{}` input. V2 discovery/describe and
+writes are unavailable; only a missing document (HTTP 404) selects legacy v3.
+No version bump or reinstall is needed: distribution tracks the marketplace's
+Git commit, with both loader version fields omitted. Feature-branch changes
+remain unreleased until merged into the tracked branch.
 Bun and a Claude Code build with hooks-module support are required.
 See [plugin setup and security notes](plugins/embrace-claude-mod/README.md).
 
