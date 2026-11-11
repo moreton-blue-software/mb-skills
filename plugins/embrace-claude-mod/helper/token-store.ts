@@ -15,6 +15,8 @@ export interface StoredToken {
   email: string | null;
   /** Verified frontend origin for display only; custody stays keyed by origin. */
   frontendOrigin?: string;
+  /** Login-bound endpoint, constrained to the canonical origin's issuer. */
+  revocationEndpoint?: string;
   access_token: string;
   refresh_token: string;
   /** Epoch milliseconds when the access token expires. */
@@ -23,6 +25,8 @@ export interface StoredToken {
 
 export interface PendingLogin {
   origin: string;
+  /** Verified display origin survives completion through the backend URL. */
+  frontendOrigin?: string;
   verifier: string;
   state: string;
   /** Epoch milliseconds when this pending login was created. */
@@ -92,6 +96,7 @@ function isStoredToken(value: unknown): value is StoredToken {
   return typeof entry.origin === 'string'
     && (entry.email === null || typeof entry.email === 'string')
     && (entry.frontendOrigin === undefined || typeof entry.frontendOrigin === 'string')
+    && (entry.revocationEndpoint === undefined || typeof entry.revocationEndpoint === 'string')
     && typeof entry.access_token === 'string'
     && typeof entry.refresh_token === 'string'
     && typeof entry.expires_at === 'number';
@@ -143,6 +148,7 @@ function isPendingLogin(value: unknown): value is PendingLogin {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Record<string, unknown>;
   return typeof entry.origin === 'string'
+    && (entry.frontendOrigin === undefined || typeof entry.frontendOrigin === 'string')
     && typeof entry.verifier === 'string'
     && typeof entry.state === 'string'
     && typeof entry.created_at === 'number';

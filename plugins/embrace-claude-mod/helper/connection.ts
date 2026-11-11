@@ -1,6 +1,6 @@
 // Public backend capabilities only. Fetch fresh; never persist connection metadata
 // or send a session, cookie, or bearer token to these endpoints.
-import { httpFetch } from './fetch';
+import { httpFetch, BACKEND_TIMEOUT_MS, BackendUnavailableError, availabilityError } from './fetch';
 
 export const CONNECTION_PATH = '/api/auth/.well-known/embrace-connection';
 export const FRONTEND_POINTER_PATH = '/.well-known/embrace-connection.json';
@@ -24,14 +24,43 @@ export interface Connection {
 export const V3_BACKEND: Backend = { product: 'embrace-v3' };
 
 async function publicDocument(endpoint: string): Promise<unknown | undefined> {
-  const response = await httpFetch(endpoint, {
-    method: 'GET', redirect: 'error', credentials: 'omit',
-    signal: AbortSignal.timeout(10_000),
-  });
-  if (response.redirected || (response.url && response.url !== endpoint)) throw new Error();
-  if (response.status === 404) return undefined;
-  if (response.status !== 200) throw new Error();
-  return response.json();
+  let unavailable: BackendUnavailableError | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const signal = AbortSignal.timeout(BACKEND_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await httpFetch(endpoint, {
+        method: 'GET', redirect: 'manual', credentials: 'omit', signal,
+      });
+    } catch (error) {
+      unavailable = availabilityError(error, signal);
+      if (attempt === 0) continue;
+      throw unavailable;
+    }
+    // Manual redirect handling distinguishes a redirect denial from a network
+    // failure without following it or sending any credentials.
+    if (response.redirected || (response.url && response.url !== endpoint)) throw new Error();
+    if (response.status >= 500) {
+      unavailable = new BackendUnavailableError('server');
+      if (attempt === 0) continue;
+      throw unavailable;
+    }
+    if (response.status === 404) {
+      // An unavailable attempt followed by absence is not verified legacy v3.
+      if (unavailable) throw unavailable;
+      return undefined;
+    }
+    if (response.status !== 200) throw new Error();
+    try {
+      return await response.json();
+    } catch (error) {
+      if (error instanceof SyntaxError) throw error;
+      unavailable = availabilityError(error, signal);
+      if (attempt === 0) continue;
+      throw unavailable;
+    }
+  }
+  throw new BackendUnavailableError('network');
 }
 
 function v2Document(value: unknown, origin: string) {
@@ -70,7 +99,8 @@ export async function resolveConnection(origin: string): Promise<Connection> {
     const document = await publicDocument(`${origin}${CONNECTION_PATH}`);
     if (document !== undefined) return { origin, backend: v2Document(document, origin).backend };
     original = { origin, backend: V3_BACKEND };
-  } catch {
+  } catch (error) {
+    if (error instanceof BackendUnavailableError) throw error;
     // Preserve this failure if the frontend has no pointer (including HTML/SPAs).
   }
   try {
@@ -90,7 +120,8 @@ export async function resolveConnection(origin: string): Promise<Connection> {
     if (document.approvalMode !== 'review-split-origin' || document.instanceId !== pointer.instance.id
       || !Array.isArray(document.frontendOrigins) || !document.frontendOrigins.includes(origin)) throw new Error();
     return { origin: target.origin, backend: document.backend, frontendOrigin: origin };
-  } catch {
+  } catch (error) {
+    if (error instanceof BackendUnavailableError) throw error;
     // Neither server-controlled bodies nor fetch errors belong in CLI output.
     throw new Error(CONNECTION_ERROR);
   }

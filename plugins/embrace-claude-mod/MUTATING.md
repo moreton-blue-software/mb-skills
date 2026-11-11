@@ -17,6 +17,8 @@ query/mutation discovery and describe report unavailable and name the advertised
 initial query. This also applies when a mutually verified frontend pointer resolves
 to that backend; frontend URLs do not enable writes. Do not substitute v3 discovery, the proxy skill or direct POST.
 See [QUERYING.md](QUERYING.md) for fail-closed backend detection and v2 reads.
+Bounded discovery/revocation retries do not apply to business POSTs; never retry
+a mutation automatically or infer success from an unavailable response.
 
 ## 1. Select the instance and intended change
 

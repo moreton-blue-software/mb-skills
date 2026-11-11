@@ -32,6 +32,7 @@ import {
   parsePastedCode,
   refreshGrant,
   revokeToken,
+  revocationEndpointOf,
   toStoredToken,
   verifyState,
 } from './oauth';
@@ -203,7 +204,7 @@ export async function runCommand(args: CliArgs, context: CliContext = {}): Promi
       case 'describe':
         return await callFlow(origin!, args, { tokenStore, now, print, fail });
       case 'logout':
-        return await logoutFlow((await resolveConnection(origin!)).origin, args, { tokenStore, now, print, fail });
+        return await logoutFlow(origin!, args, { tokenStore, now, print, fail });
       case 'status':
         return await statusFlow(origin, args, { tokenStore, now, print, fail, context });
     }
@@ -237,7 +238,7 @@ async function loginFlow(connection: Connection, args: CliArgs, flow: FlowContex
   if (args.urlOnly) {
     const { verifier, challenge } = await createPkcePair();
     const state = createState();
-    await pendingStore.put({ origin, verifier, state, created_at: flow.now() });
+    await pendingStore.put({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), verifier, state, created_at: flow.now() });
     flow.print({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), authorizeUrl: buildAuthorizeUrl(origin, challenge, state), state });
     return 0;
   }
@@ -249,7 +250,7 @@ async function loginFlow(connection: Connection, args: CliArgs, flow: FlowContex
   // Interactive terminal flow: show the URL, then prompt for the pasted code.
   const { verifier, challenge } = await createPkcePair();
   const state = createState();
-  await pendingStore.put({ origin, verifier, state, created_at: flow.now() });
+  await pendingStore.put({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), verifier, state, created_at: flow.now() });
   const write = flow.context?.stdout ?? console.log;
   write('');
   write('1. Open this URL in any browser and sign in:');
@@ -260,7 +261,7 @@ async function loginFlow(connection: Connection, args: CliArgs, flow: FlowContex
 }
 
 async function completeLogin(connection: Connection, pasted: string, flow: FlowContext): Promise<number> {
-  const { origin, frontendOrigin } = connection;
+  const { origin } = connection;
   const pendingStore = flow.pendingStore!;
   const parsed = parsePastedCode(pasted);
   const pending = await pendingStore.get(origin);
@@ -273,7 +274,9 @@ async function completeLogin(connection: Connection, pasted: string, flow: FlowC
     const grant = await exchangeCode(origin, parsed.code, pending.verifier);
     const stored = toStoredToken(origin, grant, { now: flow.now });
     if (!stored.refresh_token) throw new CliError('server did not issue a refresh token');
+    const frontendOrigin = connection.frontendOrigin ?? pending.frontendOrigin;
     if (frontendOrigin) stored.frontendOrigin = frontendOrigin;
+    stored.revocationEndpoint = revocationEndpointOf(origin);
     await flow.tokenStore.put(stored);
     flow.print({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), email: stored.email });
     return 0;
@@ -347,24 +350,36 @@ async function refreshStoredToken(stored: NonNullable<Awaited<ReturnType<TokenSt
   const refreshed = toStoredToken(stored.origin, grant, { previousEmail: stored.email, now: flow.now });
   if (!refreshed.refresh_token) refreshed.refresh_token = stored.refresh_token;
   if (stored.frontendOrigin) refreshed.frontendOrigin = stored.frontendOrigin;
+  if (stored.revocationEndpoint) refreshed.revocationEndpoint = stored.revocationEndpoint;
   await flow.tokenStore.put(refreshed);
   return refreshed.access_token;
 }
 
 async function logoutFlow(origin: string, args: CliArgs, flow: FlowContext): Promise<number> {
-  const stored = await flow.tokenStore.get(origin);
+  // A saved frontend selects a session, never a credential destination. No fresh
+  // discovery is needed: revoke only at the login-bound backend issuer.
+  let stored = await flow.tokenStore.get(origin);
+  if (!stored) {
+    const matches = (await flow.tokenStore.list()).filter(token => token.frontendOrigin === origin);
+    if (matches.length > 1) throw new CliError('multiple sessions match this frontend; logout using the backend origin');
+    stored = matches[0] ?? null;
+  }
   if (!stored) {
     flow.print({ origin, signedOut: false, reason: 'no stored session' });
     return 0;
   }
+  origin = stored.origin;
   try {
-    if (stored.refresh_token) await revokeToken(origin, stored.refresh_token);
-  } catch (error) {
+    if (!stored.refresh_token) throw new Error('no refresh token');
+    await revokeToken(origin, stored.refresh_token, stored.revocationEndpoint ?? revocationEndpointOf(origin));
+  } catch {
     if (!args.force) {
-      const message = error instanceof Error ? error.message : 'revoke failed';
-      flow.fail({ error: `${message}; session kept`, hint: 'retry, or pass --force to drop the local session anyway' });
+      flow.fail({ error: 'logout not confirmed, retry; session kept', hint: 'retry logout; --force removes only local state, without confirming server revocation' });
       return 1;
     }
+    await flow.tokenStore.remove(origin);
+    flow.print({ origin, signedOut: false, localSessionRemoved: true, reason: 'logout not confirmed, retry' });
+    return 0;
   }
   await flow.tokenStore.remove(origin);
   flow.print({ origin, signedOut: true });

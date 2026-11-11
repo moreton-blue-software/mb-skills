@@ -94,7 +94,8 @@ async function runHelper(
   stdin = '',
 ): Promise<HelperRun> {
   const { exitCode, stdout, stderr } = await $.process.run(['bun', helper, ...args], {
-    timeoutMs: 60_000,
+    // Up to six 45s public attempts plus code exchange and process overhead.
+    timeoutMs: 360_000,
     stdin,
   });
   return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };

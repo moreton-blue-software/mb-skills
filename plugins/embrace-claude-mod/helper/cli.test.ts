@@ -252,7 +252,7 @@ describe('fake-origin flow', () => {
     expect(await runCommand(parseCliArgs(['logout', '--origin', ORIGIN]), ctx)).toBe(1);
     expect(await tokens.get(ORIGIN)).not.toBeNull();
     expect(await runCommand(parseCliArgs(['logout', '--origin', ORIGIN, '--force']), ctx)).toBe(0);
-    expect(JSON.parse(out[0]!)).toEqual({ origin: ORIGIN, signedOut: true });
+    expect(JSON.parse(out[0]!)).toEqual({ origin: ORIGIN, signedOut: false, localSessionRemoved: true, reason: 'logout not confirmed, retry' });
     expect(await tokens.get(ORIGIN)).toBeNull();
   });
 });
@@ -261,7 +261,7 @@ describe('fake-origin flow', () => {
 describe('frontend URL lifecycle', () => {
   const frontend = 'https://frontend.example.test';
   const backendOrigin = 'https://backend.example.test';
-  test('login, session lookup, API, refresh and revoke use one backend session; frontend is display only', async () => {
+  for (const completionOrigin of [frontend, backendOrigin]) test(`login completion via ${completionOrigin === frontend ? 'frontend' : 'backend'} preserves one backend session`, async () => {
     const { ctx, out, err, tokens, pending } = makeContext();
     const requests: { url: string; method: string; body: string }[] = [];
     setFetchForTests(async (input, init) => {
@@ -276,7 +276,7 @@ describe('frontend URL lifecycle', () => {
       expect(new URL(url).origin).toBe(backendOrigin);
       if (url.endsWith('/oauth2/token')) {
         expect(body).toContain(`resource=${encodeURIComponent(`${backendOrigin}/api/auth`)}`);
-        return Response.json({ access_token: 'fixture-access', refresh_token: 'fixture-refresh', expires_in: 3600, token_type: 'Bearer' });
+        return Response.json({ access_token: 'fixture-access', refresh_token: 'fixture-refresh', expires_in: 3600, token_type: 'Bearer', id_token: 'synthetic-id-token' });
       }
       if (url.endsWith('/oauth2/revoke')) return new Response(null, { status: 200 });
       expect(new URL(url).pathname).toBe(`/${INITIAL_V2_PROCEDURE}`);
@@ -293,10 +293,13 @@ describe('frontend URL lifecycle', () => {
     expect(new URL(started.authorizeUrl).searchParams.get('redirect_uri')).toBe(`${backendOrigin}/oauth/cli-finish`);
     expect(await pending.get(frontend)).toBeNull();
     expect(await pending.get(backendOrigin)).not.toBeNull();
-    expect(await run(['login', '--origin', frontend, '--complete'], { ...ctx, stdin: `synthetic-code ${started.state}` })).toBe(0);
+    expect((await pending.get(backendOrigin))?.frontendOrigin).toBe(frontend);
+    expect(await run(['login', '--origin', completionOrigin, '--complete'], { ...ctx, stdin: `synthetic-code ${started.state}` })).toBe(0);
     expect(await tokens.get(frontend)).toBeNull();
     expect((await tokens.list())).toHaveLength(1);
     expect((await tokens.get(backendOrigin))?.frontendOrigin).toBe(frontend);
+    expect(await tokens.get(backendOrigin)).not.toHaveProperty('id_token');
+    expect((await tokens.get(backendOrigin))?.revocationEndpoint).toBe(`${backendOrigin}/api/auth/oauth2/revoke`);
     // Existing backend-only sessions gain display metadata only after verified connect.
     const connected = (await tokens.get(backendOrigin))!;
     delete connected.frontendOrigin;
@@ -321,6 +324,8 @@ describe('frontend URL lifecycle', () => {
     await tokens.put({ ...stored, expires_at: 0 });
     expect(await run(['call', '--origin', frontend, INITIAL_V2_PROCEDURE, '{}'])).toBe(0);
     expect((await tokens.get(backendOrigin))?.frontendOrigin).toBe(frontend);
+    expect((await tokens.get(backendOrigin))?.revocationEndpoint).toBe(`${backendOrigin}/api/auth/oauth2/revoke`);
+    expect(await tokens.get(backendOrigin)).not.toHaveProperty('id_token');
     expect(await run(['logout', '--origin', frontend])).toBe(0);
     expect(requests.some(r => r.url === `${backendOrigin}/api/auth/oauth2/revoke` && r.method === 'POST')).toBe(true);
     expect(await tokens.list()).toEqual([]);
@@ -339,10 +344,119 @@ describe('frontend URL lifecycle', () => {
     setFetchForTests(async url => String(url).endsWith(FRONTEND_POINTER_PATH)
       ? Response.json({ product: 'embrace-v2', kind: 'frontend-pointer', version: 1, instance: { id: 'fixture-instance' }, backendOrigin: `${backendOrigin}/path` })
       : new Response(null, { status: 404 }));
-    for (const command of ['login', 'call', 'status', 'logout']) {
+    for (const command of ['login', 'call', 'status']) {
       const argv = [command, '--origin', frontend, ...(command === 'login' ? ['--url-only'] : command === 'call' ? [INITIAL_V2_PROCEDURE, '{}'] : [])];
       expect(await runCommand(parseCliArgs(argv), { ...ctx, tokenStore: { get: async () => { throw new Error('Unexpected session access'); }, list: async () => [], put: async () => {}, remove: async () => true } })).toBe(1);
     }
     expect(err.every(text => text.includes('Could not verify the Embrace connection document'))).toBe(true);
+  });
+});
+
+
+describe('discovery-independent confirmed logout', () => {
+  const backend = 'https://backend.example.test', frontend = 'https://frontend.example.test';
+  const endpoint = `${backend}/api/auth/oauth2/revoke`;
+  async function setup() {
+    const context = makeContext();
+    await context.tokens.put({ origin: backend, frontendOrigin: frontend, revocationEndpoint: endpoint,
+      email: null, access_token: 'fixture-access', refresh_token: 'fixture-refresh', expires_at: 0 });
+    return context;
+  }
+  test('discovery entirely down cannot prevent revocation, for either URL', async () => {
+    for (const origin of [frontend, backend]) {
+      const { ctx, out, tokens } = await setup();
+      const requests: string[] = [];
+      setFetchForTests(async (url, init) => {
+        requests.push(String(url));
+        if (String(url) !== endpoint) throw new DOMException('private-discovery-down', 'TimeoutError');
+        expect(init?.method).toBe('POST');
+        expect(init?.redirect).toBe('manual');
+        expect(init?.credentials).toBe('omit');
+        return new Response(null, { status: 200 });
+      });
+      expect(await runCommand(parseCliArgs(['logout', '--origin', origin]), ctx)).toBe(0);
+      expect(requests).toEqual([endpoint]);
+      expect(JSON.parse(out[0]!)).toEqual({ origin: backend, signedOut: true });
+      expect(await tokens.list()).toEqual([]);
+    }
+  });
+  for (const failure of ['timeout', '503']) test(`${failure} retries once then confirms; no discovery request`, async () => {
+    const { ctx, tokens } = await setup();
+    let count = 0;
+    setFetchForTests(async url => {
+      expect(String(url)).toBe(endpoint);
+      if (++count === 1) {
+        if (failure === 'timeout') throw new DOMException('private', 'TimeoutError');
+        return new Response(null, { status: 503 });
+      }
+      return new Response(null, { status: 200 });
+    });
+    expect(await runCommand(parseCliArgs(['logout', '--origin', frontend]), ctx)).toBe(0);
+    expect(count).toBe(2);
+    expect(await tokens.list()).toEqual([]);
+  });
+  for (const failure of ['timeout', '503', 'network', 'invalid_token', 'invalid_client', 'redirect']) {
+    test(`unconfirmed ${failure} retains session, bounded attempts, no false sign-out`, async () => {
+      const { ctx, tokens, out, err } = await setup();
+      let count = 0;
+      setFetchForTests(async url => {
+        expect(String(url)).toBe(endpoint);
+        count++;
+        if (failure === 'timeout') throw new DOMException('private', 'TimeoutError');
+        if (failure === 'network') throw new TypeError('private');
+        if (failure === '503') return new Response(null, { status: 503 });
+        if (failure === 'redirect') return new Response(null, { status: 302, headers: { Location: frontend } });
+        return Response.json({ error: failure, error_description: 'private' }, { status: 400 });
+      });
+      expect(await runCommand(parseCliArgs(['logout', '--origin', frontend]), ctx)).toBe(1);
+      expect(count).toBe(failure === 'timeout' || failure === '503' ? 2 : 1);
+      expect(out).toEqual([]);
+      expect(err.join()).toContain('logout not confirmed, retry; session kept');
+      expect(err.join()).not.toContain('private');
+      expect(await tokens.get(backend)).not.toBeNull();
+    });
+  }
+  test('RFC 7009 200 for an already-invalid token confirms logout without parsing a body', async () => {
+    const { ctx, tokens } = await setup();
+    setFetchForTests(async () => new Response(null, { status: 200 }));
+    expect(await runCommand(parseCliArgs(['logout', '--origin', backend]), ctx)).toBe(0);
+    expect(await tokens.list()).toEqual([]);
+  });
+  test('missing refresh token cannot claim confirmed logout', async () => {
+    const { ctx, tokens, out } = await setup();
+    await tokens.put({ ...(await tokens.get(backend))!, refresh_token: '' });
+    let count = 0;
+    setFetchForTests(async () => { count++; return new Response(null, { status: 200 }); });
+    expect(await runCommand(parseCliArgs(['logout', '--origin', backend]), ctx)).toBe(1);
+    expect(count).toBe(0);
+    expect(out).toEqual([]);
+    expect(await tokens.get(backend)).not.toBeNull();
+  });
+  test('ambiguous saved frontend cannot select a credential destination', async () => {
+    const { ctx, tokens } = await setup();
+    await tokens.put({ ...(await tokens.get(backend))!, origin: 'https://other.example.test', revocationEndpoint: 'https://other.example.test/api/auth/oauth2/revoke' });
+    let count = 0;
+    setFetchForTests(async () => { count++; return new Response(null, { status: 200 }); });
+    expect(await runCommand(parseCliArgs(['logout', '--origin', frontend]), ctx)).toBe(1);
+    expect(count).toBe(0);
+    expect(await tokens.list()).toHaveLength(2);
+  });
+  test('legacy session derives only its canonical issuer endpoint, without discovery migration', async () => {
+    const { ctx, tokens } = await setup();
+    const token = (await tokens.get(backend))!;
+    delete token.revocationEndpoint;
+    await tokens.put(token);
+    setFetchForTests(async url => { expect(String(url)).toBe(endpoint); return new Response(null, { status: 200 }); });
+    expect(await runCommand(parseCliArgs(['logout', '--origin', frontend]), ctx)).toBe(0);
+    expect(await tokens.list()).toEqual([]);
+  });
+  test('stored foreign endpoint cannot receive a token; session retained', async () => {
+    const { ctx, tokens } = await setup();
+    await tokens.put({ ...(await tokens.get(backend))!, revocationEndpoint: `${frontend}/api/auth/oauth2/revoke` });
+    let count = 0;
+    setFetchForTests(async () => { count++; return new Response(null, { status: 200 }); });
+    expect(await runCommand(parseCliArgs(['logout', '--origin', frontend]), ctx)).toBe(1);
+    expect(count).toBe(0);
+    expect(await tokens.get(backend)).not.toBeNull();
   });
 });

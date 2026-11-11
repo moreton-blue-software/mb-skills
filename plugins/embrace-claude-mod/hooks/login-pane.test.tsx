@@ -154,6 +154,7 @@ test('frontend login uses the backend authorize URL and shows both origins after
   on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }));
   on('process.run', (_, e) => {
     calls.push([...e.argv]);
+    expect(e.init?.timeoutMs).toBe(360_000); // Durable bounded resolution/exchange budget.
     return processResult(JSON.stringify(e.argv.includes('--complete')
       ? { origin: backend, frontendOrigin: frontend, email: null }
       : { origin: backend, frontendOrigin: frontend, authorizeUrl: `${backend}/authorize?dummy=public` }));

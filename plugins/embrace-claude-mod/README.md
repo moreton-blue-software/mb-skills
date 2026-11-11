@@ -133,7 +133,7 @@ The helper also supports compatible Embrace v2 backends advertising the public
 same-origin `/api/auth/.well-known/embrace-connection` document. Detection sends
 no cookies or credentials and refuses redirects. Without a frontend pointer, only HTTP 404 preserves legacy
 v3 behavior; malformed metadata, issuer/API-origin disagreement and every other
-failure stop with a fixed error. The issuer must exactly match `<origin>/api/auth`.
+failure stop without fallback. Unavailability is reported separately from invalid metadata. The issuer must exactly match `<origin>/api/auth`.
 Metadata is fetched fresh and never cached. A frontend URL is accepted when its
 static `/.well-known/embrace-connection.json` pointer and the target backend
 mutually bind the same instance and frontend origin in `review-split-origin` mode.
@@ -145,8 +145,18 @@ Use `/embrace-connect https://frontend.example.test` or pass that frontend to
 helper commands. All OAuth, session custody, API calls and revocation stay on the
 verified backend. Either URL finds the same session; connecting an existing v2
 session switches without new login. Status/picker text shows the frontend and
-backend. Only optional frontend display metadata is saved on the existing backend
-session; there is no separate alias store. See [QUERYING.md](QUERYING.md).
+backend. The existing backend session keeps optional frontend display metadata
+and its login-bound revocation endpoint; there is no separate alias store.
+Pending logins retain the frontend display origin even when `login --complete`
+uses the backend URL. ID tokens are never saved.
+
+Discovery reads allow 45 seconds per attempt and one bounded retry for timeout,
+network or 5xx. Invalid documents/bindings still fail closed; unavailable responses
+never select v3. Logout uses the stored backend session without fresh discovery,
+with a 45-second timeout and one retry for timeout/5xx. Only HTTP 200 confirms
+revocation (including already-invalid tokens under RFC 7009). Otherwise it keeps
+the session and reports `logout not confirmed, retry`; `--force` can remove local
+state but does not claim confirmed server sign-out. See [QUERYING.md](QUERYING.md).
 
 ```text
 bun helper/cli.ts status --origin <origin> --json

@@ -5,6 +5,8 @@
 // instance identity or new plugin-state fields. V2 queries are GET-only; writes denied.
 // The helper session may keep frontendOrigin for display; OAuth/token custody and
 // session keys remain backend-origin-only after fresh mutual pointer verification.
+// Pending login keeps frontend display metadata. Sessions retain the login-bound
+// revocation endpoint for discovery-independent logout; no ID token is persisted.
 
 export type EmbraceLoginPhase = 'idle' | 'awaiting-code' | 'completing' | 'signed-in' | 'error';
 

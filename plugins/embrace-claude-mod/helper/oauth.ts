@@ -11,7 +11,7 @@
 // Never logs or returns tokens in errors.
 // Usage: see cli.ts (`login`, `logout` subcommands).
 
-import { httpFetch } from './fetch';
+import { httpFetch, BACKEND_TIMEOUT_MS, availabilityError } from './fetch';
 
 export const CLIENT_ID = 'claude-embrace-cli';
 export const SCOPES = 'openid email profile offline_access';
@@ -135,20 +135,35 @@ export function refreshGrant(origin: string, refreshToken: string): Promise<Toke
 }
 
 /** Revoke a refresh token (RFC 7009). Server returns 200 with an empty body. */
-export async function revokeToken(origin: string, refreshToken: string): Promise<void> {
-  const response = await httpFetch(`${issuerOf(origin)}/oauth2/revoke`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id: CLIENT_ID,
-      token: refreshToken,
-      token_type_hint: 'refresh_token',
-    }).toString(),
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) {
-    const code = await oauthErrorOf(response);
-    throw new Error(`revoke endpoint responded ${response.status}${code ? ` (${code})` : ''}`);
+export function revocationEndpointOf(origin: string): string {
+  const url = new URL(origin);
+  if (!['https:', 'http:'].includes(url.protocol) || url.origin !== origin) throw new Error('invalid stored backend origin');
+  return `${issuerOf(origin)}/oauth2/revoke`;
+}
+
+export async function revokeToken(origin: string, refreshToken: string, endpoint = revocationEndpointOf(origin)): Promise<void> {
+  if (endpoint !== revocationEndpointOf(origin)) throw new Error('invalid stored revocation endpoint');
+  // RFC 7009 is idempotent: retrying a revoked/unknown token still returns 200.
+  // Never retry code exchange or arbitrary business POSTs with this policy.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const signal = AbortSignal.timeout(BACKEND_TIMEOUT_MS);
+    let response: Response;
+    try {
+      response = await httpFetch(endpoint, {
+        method: 'POST', redirect: 'manual', credentials: 'omit',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ client_id: CLIENT_ID, token: refreshToken, token_type_hint: 'refresh_token' }).toString(),
+        signal,
+      });
+    } catch (error) {
+      const unavailable = availabilityError(error, signal);
+      if (attempt === 0 && unavailable.reason === 'timeout') continue;
+      throw unavailable;
+    }
+    if (response.redirected || (response.url && response.url !== endpoint)) throw new Error('revocation redirect refused');
+    if (response.status === 200) return;
+    if (response.status >= 500 && attempt === 0) continue;
+    throw new Error('revocation not confirmed');
   }
 }
 

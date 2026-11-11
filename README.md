@@ -129,6 +129,8 @@ including `core.auth.getUserSession` with `{}` input. V2 discovery/describe and
 writes are unavailable. Frontend URLs also work through a strictly validated,
 mutually bound static pointer; authentication and sessions stay backend-bound.
 Without a pointer, only a missing document (HTTP 404) selects legacy v3.
+Transient discovery failures report retryable unavailability; logout uses the
+login-bound backend session without discovery and preserves unconfirmed sessions.
 No version bump or reinstall is needed: distribution tracks the marketplace's
 Git commit, with both loader version fields omitted. Feature-branch changes
 remain unreleased until merged into the tracked branch.

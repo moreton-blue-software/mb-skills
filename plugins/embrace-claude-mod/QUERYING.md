@@ -44,8 +44,9 @@ For an explicit origin, `status --origin <origin> --json` checks the public
 same-origin `/api/auth/.well-known/embrace-connection` document without cookies,
 credentials or redirects. `call`, `discover`, `describe` and `mutate` perform the
 same fresh check. With no frontend pointer, only HTTP 404 selects the existing v3 behavior. Malformed,
-inconsistent, redirected or otherwise inaccessible metadata stops the command
-with a fixed connection-verification error; it never silently selects v3.
+inconsistent or redirected metadata stops with the fixed connection-verification
+error. Timeout, network and server unavailability have separate fixed retryable
+diagnostics; none silently selects v3.
 The issuer must be exactly `<origin>/api/auth`, and the advertised tRPC base URL
 must share that origin. No connection document or instance ID is persisted.
 
@@ -56,7 +57,7 @@ have exactly `product: "embrace-v2"`, `kind: "frontend-pointer"`, `version: 1`,
 `instance: {id: <non-empty-id>}` and an HTTPS `backendOrigin` (origin only, no
 path, trailing slash, credentials, query or fragment). No extra fields are allowed.
 The target must differ from the frontend. The helper fetches the target backend
-document once and requires matching instance ID, `review-split-origin` approval
+document at one hop and requires matching instance ID, `review-split-origin` approval
 mode and exact membership of the entered frontend origin in `frontendOrigins`.
 Additional frontend members are allowed. It never follows a second pointer.
 Both fetches reject redirects and send no credentials. A present invalid pointer
@@ -69,11 +70,30 @@ OAuth or API access before mutual binding succeeds.
 
 All OAuth, session keys, calls and revocation use the resolved backend origin.
 Either URL finds the same session; logout through the frontend revokes at the
-backend. The existing session stores only optional `frontendOrigin` for display,
+backend. The existing session stores optional `frontendOrigin` for display and
+a login-bound `revocationEndpoint` constrained to the canonical backend issuer,
 not an alias map, pointer, instance ID or cached connection authority. JSON status
 keeps canonical `origin` and may add `frontendOrigin`; text/picker/status display
-shows the frontend with its backend. Fresh resolution is still required for a
-frontend command. Existing backend-only and v3 session records remain valid.
+shows the frontend with its backend. Connect/status/call still resolve fresh;
+logout deliberately does not depend on discovery. Existing backend-only and v3
+sessions derive their original canonical issuer revocation endpoint without a
+migration. A saved frontend can select a session for logout, never a destination.
+
+Public document reads allow 45 seconds per attempt and one retry for timeout,
+network failure or 5xx. A timeout reports `Embrace backend unavailable (timed out);
+try again`; network/server errors have corresponding fixed diagnostics. Invalid
+metadata is not retried as unavailability. No OAuth code exchange or business
+write gets this retry policy. The plugin helper process has a bounded six-minute
+outer budget for resolution plus code exchange.
+
+Logout sends only the saved refresh token to its login-bound backend revocation
+endpoint, with redirects refused, 45 seconds per attempt and one retry on timeout
+or 5xx. HTTP 200 confirms RFC 7009 revocation, including already-invalid tokens;
+other responses or transport uncertainty retain the session and report
+`logout not confirmed, retry; session kept`. Explicit `--force` removes local
+state only and reports unconfirmed server logout, never `signedOut: true`.
+Pending logins keep verified frontend display metadata, so completing the same
+pending login through either URL preserves it. ID tokens are never persisted.
 
 A verified `product: "embrace-v2"` selects v2. Explicit-origin JSON status adds
 `backend.product`, `procedureDiscovery: false` and, when advertised,
