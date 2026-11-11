@@ -261,7 +261,8 @@ describe('fake-origin flow', () => {
 describe('frontend URL lifecycle', () => {
   const frontend = 'https://frontend.example.test';
   const backendOrigin = 'https://backend.example.test';
-  for (const completionOrigin of [frontend, backendOrigin]) test(`login completion via ${completionOrigin === frontend ? 'frontend' : 'backend'} preserves one backend session`, async () => {
+  for (const approvalMode of ['review-split-origin', 'split-origin'])
+  for (const completionOrigin of [frontend, backendOrigin]) test(`${approvalMode}: login completion via ${completionOrigin === frontend ? 'frontend' : 'backend'} preserves one backend session`, async () => {
     const { ctx, out, err, tokens, pending } = makeContext();
     const requests: { url: string; method: string; body: string }[] = [];
     setFetchForTests(async (input, init) => {
@@ -272,7 +273,7 @@ describe('frontend URL lifecycle', () => {
         instance: { id: 'fixture-instance' }, backendOrigin });
       if (url === `${backendOrigin}${CONNECTION_PATH}`) return Response.json({ product: 'embrace-v2', instance: { id: 'fixture-instance' },
         issuer: `${backendOrigin}/api/auth`, api: { transport: 'trpc', baseUrl: backendOrigin, procedureDiscovery: false, initialAllowedProcedure: INITIAL_V2_PROCEDURE },
-        approvalMode: 'review-split-origin', frontendOrigins: [frontend] });
+        approvalMode, frontendOrigins: [frontend] });
       expect(new URL(url).origin).toBe(backendOrigin);
       if (url.endsWith('/oauth2/token')) {
         expect(body).toContain(`resource=${encodeURIComponent(`${backendOrigin}/api/auth`)}`);

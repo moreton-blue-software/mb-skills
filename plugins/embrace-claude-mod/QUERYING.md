@@ -57,8 +57,10 @@ have exactly `product: "embrace-v2"`, `kind: "frontend-pointer"`, `version: 1`,
 `instance: {id: <non-empty-id>}` and an HTTPS `backendOrigin` (origin only, no
 path, trailing slash, credentials, query or fragment). No extra fields are allowed.
 The target must differ from the frontend. The helper fetches the target backend
-document at one hop and requires matching instance ID, `review-split-origin` approval
-mode and exact membership of the entered frontend origin in `frontendOrigins`.
+document at one hop and requires matching instance ID, `split-origin` or
+`review-split-origin` approval mode, and exact membership of the entered frontend
+origin in `frontendOrigins`. Both modes require API origin equal to the backend
+and issuer origin; unknown modes remain rejected.
 Additional frontend members are allowed. It never follows a second pointer.
 Both fetches reject redirects and send no credentials. A present invalid pointer
 or failed mutual binding stops with the same fixed connection error.

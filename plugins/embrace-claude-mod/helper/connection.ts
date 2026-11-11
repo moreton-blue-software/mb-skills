@@ -77,7 +77,8 @@ function v2Document(value: unknown, origin: string) {
     || document.api.procedureDiscovery !== false
     || typeof document.api.baseUrl !== 'string'
     || (document.api.initialAllowedProcedure !== undefined && document.api.initialAllowedProcedure !== INITIAL_V2_PROCEDURE)
-    || (document.approvalMode !== 'app-origin' && document.approvalMode !== 'review-split-origin')) throw new Error();
+    || (document.approvalMode !== 'app-origin' && document.approvalMode !== 'review-split-origin'
+      && document.approvalMode !== 'split-origin')) throw new Error();
   const base = new URL(document.api.baseUrl);
   if (base.origin !== origin || base.username || base.password || base.search || base.hash) throw new Error();
   const backend: Backend = {
@@ -117,7 +118,8 @@ export async function resolveConnection(origin: string): Promise<Connection> {
     // An origin string, not an arbitrary URL: reject even a trailing slash.
     if (target.protocol !== 'https:' || target.origin !== pointer.backendOrigin || target.origin === origin) throw new Error();
     const document = v2Document(await publicDocument(`${target.origin}${CONNECTION_PATH}`), target.origin);
-    if (document.approvalMode !== 'review-split-origin' || document.instanceId !== pointer.instance.id
+    if ((document.approvalMode !== 'review-split-origin' && document.approvalMode !== 'split-origin')
+      || document.instanceId !== pointer.instance.id
       || !Array.isArray(document.frontendOrigins) || !document.frontendOrigins.includes(origin)) throw new Error();
     return { origin: target.origin, backend: document.backend, frontendOrigin: origin };
   } catch (error) {
