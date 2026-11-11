@@ -126,7 +126,9 @@ reviewed mutations — including confirmation-gated archived deletes — POST
 directly to discovered v3 tRPC procedures. Compatible v2 backends are detected
 from a verified same-origin connection document and support GET-only queries,
 including `core.auth.getUserSession` with `{}` input. V2 discovery/describe and
-writes are unavailable; only a missing document (HTTP 404) selects legacy v3.
+writes are unavailable. Frontend URLs also work through a strictly validated,
+mutually bound static pointer; authentication and sessions stay backend-bound.
+Without a pointer, only a missing document (HTTP 404) selects legacy v3.
 No version bump or reinstall is needed: distribution tracks the marketplace's
 Git commit, with both loader version fields omitted. Feature-branch changes
 remain unreleased until merged into the tracked branch.

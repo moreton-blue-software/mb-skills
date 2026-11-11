@@ -14,7 +14,8 @@ these examples.
 V2 backends detected through their verified connection document do not support
 this write lane. `mutate` refuses before token refresh or procedure dispatch;
 query/mutation discovery and describe report unavailable and name the advertised
-initial query. Do not substitute v3 discovery, the proxy skill or direct POST.
+initial query. This also applies when a mutually verified frontend pointer resolves
+to that backend; frontend URLs do not enable writes. Do not substitute v3 discovery, the proxy skill or direct POST.
 See [QUERYING.md](QUERYING.md) for fail-closed backend detection and v2 reads.
 
 ## 1. Select the instance and intended change

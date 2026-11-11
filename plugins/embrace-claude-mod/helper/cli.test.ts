@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CliError, parseCliArgs, runCommand, type CliContext } from './cli';
 import { setFetchForTests } from './fetch';
+import { CONNECTION_PATH, FRONTEND_POINTER_PATH, INITIAL_V2_PROCEDURE } from './connection';
 import { FilePendingLoginStore, FileTokenStore } from './token-store';
 
 afterEach(() => setFetchForTests());
@@ -253,5 +254,95 @@ describe('fake-origin flow', () => {
     expect(await runCommand(parseCliArgs(['logout', '--origin', ORIGIN, '--force']), ctx)).toBe(0);
     expect(JSON.parse(out[0]!)).toEqual({ origin: ORIGIN, signedOut: true });
     expect(await tokens.get(ORIGIN)).toBeNull();
+  });
+});
+
+
+describe('frontend URL lifecycle', () => {
+  const frontend = 'https://frontend.example.test';
+  const backendOrigin = 'https://backend.example.test';
+  test('login, session lookup, API, refresh and revoke use one backend session; frontend is display only', async () => {
+    const { ctx, out, err, tokens, pending } = makeContext();
+    const requests: { url: string; method: string; body: string }[] = [];
+    setFetchForTests(async (input, init) => {
+      const url = String(input), body = String(init?.body ?? '');
+      requests.push({ url, method: init?.method ?? 'GET', body });
+      if (url === `${frontend}${CONNECTION_PATH}`) return new Response('<html>SPA</html>');
+      if (url === `${frontend}${FRONTEND_POINTER_PATH}`) return Response.json({ product: 'embrace-v2', kind: 'frontend-pointer', version: 1,
+        instance: { id: 'fixture-instance' }, backendOrigin });
+      if (url === `${backendOrigin}${CONNECTION_PATH}`) return Response.json({ product: 'embrace-v2', instance: { id: 'fixture-instance' },
+        issuer: `${backendOrigin}/api/auth`, api: { transport: 'trpc', baseUrl: backendOrigin, procedureDiscovery: false, initialAllowedProcedure: INITIAL_V2_PROCEDURE },
+        approvalMode: 'review-split-origin', frontendOrigins: [frontend] });
+      expect(new URL(url).origin).toBe(backendOrigin);
+      if (url.endsWith('/oauth2/token')) {
+        expect(body).toContain(`resource=${encodeURIComponent(`${backendOrigin}/api/auth`)}`);
+        return Response.json({ access_token: 'fixture-access', refresh_token: 'fixture-refresh', expires_in: 3600, token_type: 'Bearer' });
+      }
+      if (url.endsWith('/oauth2/revoke')) return new Response(null, { status: 200 });
+      expect(new URL(url).pathname).toBe(`/${INITIAL_V2_PROCEDURE}`);
+      expect(init?.method).toBe('GET');
+      expect(JSON.parse(new URL(url).searchParams.get('input')!)).toEqual({ json: {} });
+      return Response.json({ result: { data: { json: { userId: 'fixture-user', isSuperUser: false } } } });
+    });
+    const run = (argv: string[], context: CliContext = ctx) => runCommand(parseCliArgs(argv), context);
+    expect(await run(['login', '--origin', frontend, '--url-only'])).toBe(0);
+    const started = JSON.parse(out.at(-1)!);
+    expect(started.origin).toBe(backendOrigin);
+    expect(started.frontendOrigin).toBe(frontend);
+    expect(new URL(started.authorizeUrl).origin).toBe(backendOrigin);
+    expect(new URL(started.authorizeUrl).searchParams.get('redirect_uri')).toBe(`${backendOrigin}/oauth/cli-finish`);
+    expect(await pending.get(frontend)).toBeNull();
+    expect(await pending.get(backendOrigin)).not.toBeNull();
+    expect(await run(['login', '--origin', frontend, '--complete'], { ...ctx, stdin: `synthetic-code ${started.state}` })).toBe(0);
+    expect(await tokens.get(frontend)).toBeNull();
+    expect((await tokens.list())).toHaveLength(1);
+    expect((await tokens.get(backendOrigin))?.frontendOrigin).toBe(frontend);
+    // Existing backend-only sessions gain display metadata only after verified connect.
+    const connected = (await tokens.get(backendOrigin))!;
+    delete connected.frontendOrigin;
+    await tokens.put(connected);
+    expect(await run(['login', '--origin', frontend, '--url-only'])).toBe(0);
+    expect((await tokens.get(backendOrigin))?.frontendOrigin).toBe(frontend);
+    for (const origin of [frontend, backendOrigin]) {
+      expect(await run(['status', '--origin', origin, '--json'])).toBe(0);
+      expect(JSON.parse(out.at(-1)!).sessions).toEqual([{ origin: backendOrigin, frontendOrigin: frontend, email: null, accessTokenValid: true }]);
+      expect(await run(['call', '--origin', origin, INITIAL_V2_PROCEDURE, '{}'])).toBe(0);
+      expect(JSON.parse(out.at(-1)!)).toEqual({ userId: 'fixture-user', isSuperUser: false });
+      const count = requests.filter(r => r.method === 'POST').length;
+      expect(await run(['login', '--origin', origin, '--url-only'])).toBe(0);
+      expect(JSON.parse(out.at(-1)!).connected).toBe(true);
+      expect(requests.filter(r => r.method === 'POST')).toHaveLength(count);
+    }
+    expect(await run(['status', '--json'])).toBe(0);
+    expect(JSON.parse(out.at(-1)!).sessions[0].frontendOrigin).toBe(frontend);
+    expect(await run(['status'])).toBe(0);
+    expect(out.at(-1)).toContain(`connected to ${frontend} (backend ${backendOrigin})`);
+    const stored = (await tokens.get(backendOrigin))!;
+    await tokens.put({ ...stored, expires_at: 0 });
+    expect(await run(['call', '--origin', frontend, INITIAL_V2_PROCEDURE, '{}'])).toBe(0);
+    expect((await tokens.get(backendOrigin))?.frontendOrigin).toBe(frontend);
+    expect(await run(['logout', '--origin', frontend])).toBe(0);
+    expect(requests.some(r => r.url === `${backendOrigin}/api/auth/oauth2/revoke` && r.method === 'POST')).toBe(true);
+    expect(await tokens.list()).toEqual([]);
+    await tokens.put(stored);
+    expect(await run(['logout', '--origin', backendOrigin])).toBe(0);
+    expect(await tokens.list()).toEqual([]);
+    expect(await pending.get(backendOrigin)).toBeNull();
+    expect(err).toEqual([]);
+    const text = out.join('\n');
+    expect(text).not.toContain('fixture-access');
+    expect(text).not.toContain('fixture-refresh');
+    expect(text).not.toContain('synthetic-code');
+  });
+  test('unverified pointer prevents OAuth and session access', async () => {
+    const { ctx, err } = makeContext();
+    setFetchForTests(async url => String(url).endsWith(FRONTEND_POINTER_PATH)
+      ? Response.json({ product: 'embrace-v2', kind: 'frontend-pointer', version: 1, instance: { id: 'fixture-instance' }, backendOrigin: `${backendOrigin}/path` })
+      : new Response(null, { status: 404 }));
+    for (const command of ['login', 'call', 'status', 'logout']) {
+      const argv = [command, '--origin', frontend, ...(command === 'login' ? ['--url-only'] : command === 'call' ? [INITIAL_V2_PROCEDURE, '{}'] : [])];
+      expect(await runCommand(parseCliArgs(argv), { ...ctx, tokenStore: { get: async () => { throw new Error('Unexpected session access'); }, list: async () => [], put: async () => {}, remove: async () => true } })).toBe(1);
+    }
+    expect(err.every(text => text.includes('Could not verify the Embrace connection document'))).toBe(true);
   });
 });

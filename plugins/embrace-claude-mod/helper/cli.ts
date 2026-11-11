@@ -48,7 +48,7 @@ import {
   type TokenStore,
 } from './token-store';
 import { assertProcedureName, callQuery } from './trpc';
-import { detectBackend, unavailableDiscovery } from './connection';
+import { resolveConnection, unavailableDiscovery, type Connection } from './connection';
 import { discoveryRequest, LIST_QUERIES, DESCRIBE_QUERY, LIST_MUTATIONS, DESCRIBE_MUTATION, type OperationType } from './discovery';
 import { executeReviewedMutation } from './mutations';
 
@@ -196,16 +196,16 @@ export async function runCommand(args: CliArgs, context: CliContext = {}): Promi
     const origin = args.origin === undefined ? undefined : normalizeOrigin(args.origin);
     switch (args.command) {
       case 'login':
-        return await loginFlow(origin!, args, { tokenStore, pendingStore, now, print, fail, context });
+        return await loginFlow(await resolveConnection(origin!), args, { tokenStore, pendingStore, now, print, fail, context });
       case 'call':
       case 'mutate':
       case 'discover':
       case 'describe':
         return await callFlow(origin!, args, { tokenStore, now, print, fail });
       case 'logout':
-        return await logoutFlow(origin!, args, { tokenStore, now, print, fail });
+        return await logoutFlow((await resolveConnection(origin!)).origin, args, { tokenStore, now, print, fail });
       case 'status':
-        return await statusFlow(origin, args, { tokenStore, now, print, fail });
+        return await statusFlow(origin, args, { tokenStore, now, print, fail, context });
     }
   } catch (error) {
     return fail(error);
@@ -221,19 +221,29 @@ type FlowContext = {
   context?: CliContext;
 };
 
-async function loginFlow(origin: string, args: CliArgs, flow: FlowContext): Promise<number> {
+async function loginFlow(connection: Connection, args: CliArgs, flow: FlowContext): Promise<number> {
+  const { origin, frontendOrigin } = connection;
+  const stored = await flow.tokenStore.get(origin);
+  if (args.urlOnly && connection.backend.product === 'embrace-v2' && stored) {
+    if (frontendOrigin && stored.frontendOrigin !== frontendOrigin) {
+      await flow.tokenStore.put({ ...stored, frontendOrigin });
+    }
+    const displayOrigin = frontendOrigin ?? stored.frontendOrigin;
+    flow.print({ origin, ...(displayOrigin ? { frontendOrigin: displayOrigin } : {}), email: stored.email, accessTokenValid: !isTokenExpired(stored, flow.now()), connected: true });
+    return 0;
+  }
   const pendingStore = flow.pendingStore!;
 
   if (args.urlOnly) {
     const { verifier, challenge } = await createPkcePair();
     const state = createState();
     await pendingStore.put({ origin, verifier, state, created_at: flow.now() });
-    flow.print({ origin, authorizeUrl: buildAuthorizeUrl(origin, challenge, state), state });
+    flow.print({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), authorizeUrl: buildAuthorizeUrl(origin, challenge, state), state });
     return 0;
   }
 
   if (args.complete) {
-    return completeLogin(origin, await readPasted(flow.context), flow);
+    return completeLogin(connection, await readPasted(flow.context), flow);
   }
 
   // Interactive terminal flow: show the URL, then prompt for the pasted code.
@@ -246,10 +256,11 @@ async function loginFlow(origin: string, args: CliArgs, flow: FlowContext): Prom
   write(`   ${buildAuthorizeUrl(origin, challenge, state)}`);
   write('2. The finish page shows a one-time code. Paste it here (with its state, if shown).');
   const pasted = await readPasted(flow.context, 'one-time code: ');
-  return completeLogin(origin, pasted, flow);
+  return completeLogin(connection, pasted, flow);
 }
 
-async function completeLogin(origin: string, pasted: string, flow: FlowContext): Promise<number> {
+async function completeLogin(connection: Connection, pasted: string, flow: FlowContext): Promise<number> {
+  const { origin, frontendOrigin } = connection;
   const pendingStore = flow.pendingStore!;
   const parsed = parsePastedCode(pasted);
   const pending = await pendingStore.get(origin);
@@ -262,8 +273,9 @@ async function completeLogin(origin: string, pasted: string, flow: FlowContext):
     const grant = await exchangeCode(origin, parsed.code, pending.verifier);
     const stored = toStoredToken(origin, grant, { now: flow.now });
     if (!stored.refresh_token) throw new CliError('server did not issue a refresh token');
+    if (frontendOrigin) stored.frontendOrigin = frontendOrigin;
     await flow.tokenStore.put(stored);
-    flow.print({ origin, email: stored.email });
+    flow.print({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), email: stored.email });
     return 0;
   } finally {
     // The verifier and the code are single-use either way.
@@ -272,7 +284,9 @@ async function completeLogin(origin: string, pasted: string, flow: FlowContext):
 }
 
 async function callFlow(origin: string, args: CliArgs, flow: FlowContext): Promise<number> {
-  const backend = await detectBackend(origin);
+  const connection = await resolveConnection(origin);
+  origin = connection.origin;
+  const { backend } = connection;
   if (backend.product === 'embrace-v2') {
     if (args.command === 'mutate') throw new CliError('V2 mutations are not supported; no write was dispatched.');
     if (args.command === 'discover' || args.command === 'describe'
@@ -332,6 +346,7 @@ async function refreshStoredToken(stored: NonNullable<Awaited<ReturnType<TokenSt
   }
   const refreshed = toStoredToken(stored.origin, grant, { previousEmail: stored.email, now: flow.now });
   if (!refreshed.refresh_token) refreshed.refresh_token = stored.refresh_token;
+  if (stored.frontendOrigin) refreshed.frontendOrigin = stored.frontendOrigin;
   await flow.tokenStore.put(refreshed);
   return refreshed.access_token;
 }
@@ -357,13 +372,16 @@ async function logoutFlow(origin: string, args: CliArgs, flow: FlowContext): Pro
 }
 
 async function statusFlow(origin: string | undefined, args: CliArgs, flow: FlowContext): Promise<number> {
-  const backend = origin === undefined ? undefined : await detectBackend(origin);
+  const connection = origin === undefined ? undefined : await resolveConnection(origin);
+  if (connection) origin = connection.origin;
+  const backend = connection?.backend;
   const tokens = origin === undefined ? await flow.tokenStore.list() : [await flow.tokenStore.get(origin)].filter(
     (token): token is NonNullable<typeof token> => token !== null,
   );
   const sessions = tokens.map(token => ({
     origin: token.origin,
     email: token.email,
+    ...(token.frontendOrigin ? { frontendOrigin: token.frontendOrigin } : {}),
     accessTokenValid: !isTokenExpired(token, flow.now()),
   }));
   if (args.json) {
@@ -376,7 +394,7 @@ async function statusFlow(origin: string | undefined, args: CliArgs, flow: FlowC
   const write = flow.context?.stdout ?? console.log;
   if (sessions.length === 0) write(`no Embrace sessions (state: ${stateDirectory()})`);
   for (const session of sessions) {
-    write(`${session.origin}  ${session.email ?? 'unknown email'}  access token ${session.accessTokenValid ? 'valid' : 'EXPIRED'}`);
+    write(`${session.frontendOrigin ? `connected to ${session.frontendOrigin} (backend ${session.origin})` : session.origin}  ${session.email ?? 'unknown email'}  access token ${session.accessTokenValid ? 'valid' : 'EXPIRED'}`);
   }
   return 0;
 }

@@ -13,6 +13,8 @@ import { join } from 'node:path';
 export interface StoredToken {
   origin: string;
   email: string | null;
+  /** Verified frontend origin for display only; custody stays keyed by origin. */
+  frontendOrigin?: string;
   access_token: string;
   refresh_token: string;
   /** Epoch milliseconds when the access token expires. */
@@ -89,6 +91,7 @@ function isStoredToken(value: unknown): value is StoredToken {
   const entry = value as Record<string, unknown>;
   return typeof entry.origin === 'string'
     && (entry.email === null || typeof entry.email === 'string')
+    && (entry.frontendOrigin === undefined || typeof entry.frontendOrigin === 'string')
     && typeof entry.access_token === 'string'
     && typeof entry.refresh_token === 'string'
     && typeof entry.expires_at === 'number';

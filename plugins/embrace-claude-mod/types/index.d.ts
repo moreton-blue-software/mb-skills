@@ -2,7 +2,9 @@
 // Schema-guided Date input transport lives solely in the helper. It adds no
 // plugin state or token access; see QUERYING.md and MUTATING.md for its contract.
 // Fresh v2 connection detection also stays in the helper: no persisted metadata,
-// instance identity or plugin-state fields. V2 queries are GET-only; writes denied.
+// instance identity or new plugin-state fields. V2 queries are GET-only; writes denied.
+// The helper session may keep frontendOrigin for display; OAuth/token custody and
+// session keys remain backend-origin-only after fresh mutual pointer verification.
 
 export type EmbraceLoginPhase = 'idle' | 'awaiting-code' | 'completing' | 'signed-in' | 'error';
 

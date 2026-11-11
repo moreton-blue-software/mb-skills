@@ -17,6 +17,7 @@ import { atom, read, update } from 'claude-code';
 import type { EngineInterface, PluginOptions, Register } from 'claude-code';
 import { appendQueryGuidance } from './query-guidance';
 import {
+  sessionLocation,
   ADD_ANOTHER,
   connectPickerOptions,
   parseSessions,
@@ -132,6 +133,11 @@ async function startLogin($: EngineInterface, options: PluginOptions, origin: st
   const started = await runHelper($, helper, ['login', '--origin', origin, '--url-only']);
   if (started.exitCode !== 0) return `helper failed: ${helperError(started)}`;
   const payload = parseHelperJson(started.stdout);
+  if (payload?.connected === true && typeof payload.origin === 'string') {
+    return switchInstance($, { origin: payload.origin,
+      ...(typeof payload.frontendOrigin === 'string' ? { frontendOrigin: payload.frontendOrigin } : {}),
+      email: typeof payload.email === 'string' ? payload.email : null, accessTokenValid: payload.accessTokenValid === true });
+  }
   const authorizeUrl = typeof payload?.authorizeUrl === 'string' ? payload.authorizeUrl : '';
   if (!authorizeUrl) return 'helper returned no authorize URL';
   await update($, login, previous => ({
@@ -167,7 +173,7 @@ async function completeLogin($: EngineInterface, options: PluginOptions, pasted:
       email,
     } satisfies EmbraceLoginState));
     await $.store.set(ORIGIN_STORE_KEY, state.origin);
-    $.ui.status(`embrace: ${email ?? 'signed in'} @ ${hostOf(state.origin)}`);
+    $.ui.status(`embrace: ${email ?? 'signed in'} @ ${sessionLocation({ origin: typeof payload.origin === 'string' ? payload.origin : state.origin, frontendOrigin: typeof payload.frontendOrigin === 'string' ? payload.frontendOrigin : undefined })}`);
     $.ui.toast(`Signed in to Embrace as ${email ?? hostOf(state.origin)}`);
     await $.ui.close({ id: LOGIN_PANE });
   } else {
@@ -191,8 +197,8 @@ async function listSessions($: EngineInterface, options: PluginOptions): Promise
 /** Point the active instance at an already-connected origin; no login, no token write. */
 async function switchInstance($: EngineInterface, session: SessionRow): Promise<string> {
   await $.store.set(ORIGIN_STORE_KEY, session.origin);
-  $.ui.status(`embrace: ${session.email ?? 'signed in'} @ ${hostOf(session.origin)}`);
-  $.ui.toast(`Switched to ${hostOf(session.origin)}`);
+  $.ui.status(`embrace: ${session.email ?? 'signed in'} @ ${sessionLocation(session)}`);
+  $.ui.toast(`Switched to ${sessionLocation(session)}`);
   const expiryNote = session.accessTokenValid ? '' : ' Its access token will refresh on the next request.';
   return `Switched to ${session.origin}${session.email ? ` (signed in as ${session.email})` : ''}.${expiryNote}`;
 }
@@ -204,7 +210,7 @@ async function refreshStatusLine($: EngineInterface, options: PluginOptions): Pr
       $.store.get(ORIGIN_STORE_KEY),
     ]);
     const session = pickStatusSession(sessions, activeOrigin);
-    if (session) $.ui.status(`embrace: ${session.email ?? 'signed in'} @ ${hostOf(session.origin)}`);
+    if (session) $.ui.status(`embrace: ${session.email ?? 'signed in'} @ ${sessionLocation(session)}`);
   } catch {
     // Best-effort only; the status line stays unset.
   }
@@ -240,7 +246,7 @@ async function runConnect(
       if (answer !== ADD_ANOTHER) {
         const asOrigin = normalizeOrigin(answer);
         const match = sessions.find(session => sessionLabel(session) === answer)
-          ?? (asOrigin ? sessions.find(session => session.origin === asOrigin) : undefined);
+          ?? (asOrigin ? sessions.find(session => session.origin === asOrigin || session.frontendOrigin === asOrigin) : undefined);
         if (match) return { text: note + (await switchInstance($, match)) };
         if (!asOrigin) return { text: `Not a valid Embrace origin: ${answer}` };
         requested = asOrigin; // Free text under "Other": a new origin to sign in to.

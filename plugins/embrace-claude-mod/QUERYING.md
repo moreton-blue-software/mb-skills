@@ -43,11 +43,37 @@ Treat this as an identity check only, not proof of permission for CRM or Project
 For an explicit origin, `status --origin <origin> --json` checks the public
 same-origin `/api/auth/.well-known/embrace-connection` document without cookies,
 credentials or redirects. `call`, `discover`, `describe` and `mutate` perform the
-same fresh check. Only HTTP 404 selects the existing v3 behavior. Malformed,
+same fresh check. With no frontend pointer, only HTTP 404 selects the existing v3 behavior. Malformed,
 inconsistent, redirected or otherwise inaccessible metadata stops the command
 with a fixed connection-verification error; it never silently selects v3.
 The issuer must be exactly `<origin>/api/auth`, and the advertised tRPC base URL
 must share that origin. No connection document or instance ID is persisted.
+
+A frontend URL is also accepted by `/embrace-connect`, login, status, call and
+logout when it publishes `/.well-known/embrace-connection.json`. If the initial
+backend document is not valid v2, the helper checks this static pointer. It must
+have exactly `product: "embrace-v2"`, `kind: "frontend-pointer"`, `version: 1`,
+`instance: {id: <non-empty-id>}` and an HTTPS `backendOrigin` (origin only, no
+path, trailing slash, credentials, query or fragment). No extra fields are allowed.
+The target must differ from the frontend. The helper fetches the target backend
+document once and requires matching instance ID, `review-split-origin` approval
+mode and exact membership of the entered frontend origin in `frontendOrigins`.
+Additional frontend members are allowed. It never follows a second pointer.
+Both fetches reject redirects and send no credentials. A present invalid pointer
+or failed mutual binding stops with the same fixed connection error.
+
+If the pointer returns 404, the original backend-document outcome is preserved:
+404 remains v3; HTML/SPA, malformed or otherwise failed metadata remains an error.
+A valid direct v2 document never triggers a pointer probe. No target is used for
+OAuth or API access before mutual binding succeeds.
+
+All OAuth, session keys, calls and revocation use the resolved backend origin.
+Either URL finds the same session; logout through the frontend revokes at the
+backend. The existing session stores only optional `frontendOrigin` for display,
+not an alias map, pointer, instance ID or cached connection authority. JSON status
+keeps canonical `origin` and may add `frontendOrigin`; text/picker/status display
+shows the frontend with its backend. Fresh resolution is still required for a
+frontend command. Existing backend-only and v3 session records remain valid.
 
 A verified `product: "embrace-v2"` selects v2. Explicit-origin JSON status adds
 `backend.product`, `procedureDiscovery: false` and, when advertised,

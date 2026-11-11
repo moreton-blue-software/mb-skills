@@ -81,3 +81,12 @@ describe('connectPickerOptions', () => {
     expect(connectPickerOptions([], undefined)).toEqual([]);
   });
 });
+
+
+test('frontend display shares a backend session and active selection', () => {
+  const session = { origin: 'https://backend.example.test', frontendOrigin: 'https://frontend.example.test', email: null, accessTokenValid: false };
+  expect(parseSessions([session])).toEqual([session]);
+  expect(sessionLabel(session)).toContain('frontend.example.test (backend backend.example.test)');
+  expect(pickStatusSession([session], session.frontendOrigin)).toBe(session);
+  expect(pickStatusSession([session], session.origin)).toBe(session);
+});

@@ -131,10 +131,22 @@ contract instead of guessing. Customers need no private GitHub access.
 
 The helper also supports compatible Embrace v2 backends advertising the public
 same-origin `/api/auth/.well-known/embrace-connection` document. Detection sends
-no cookies or credentials and refuses redirects. Only HTTP 404 preserves legacy
+no cookies or credentials and refuses redirects. Without a frontend pointer, only HTTP 404 preserves legacy
 v3 behavior; malformed metadata, issuer/API-origin disagreement and every other
 failure stop with a fixed error. The issuer must exactly match `<origin>/api/auth`.
-Metadata is fetched fresh, never cached or added to session/token storage.
+Metadata is fetched fresh and never cached. A frontend URL is accepted when its
+static `/.well-known/embrace-connection.json` pointer and the target backend
+mutually bind the same instance and frontend origin in `review-split-origin` mode.
+Pointers use an exact version-1 shape and HTTPS backend origin, with no extra
+fields, redirects or chains. A missing pointer preserves the original document
+outcome, including HTML/SPA errors. A present invalid pointer fails closed.
+
+Use `/embrace-connect https://frontend.example.test` or pass that frontend to
+helper commands. All OAuth, session custody, API calls and revocation stay on the
+verified backend. Either URL finds the same session; connecting an existing v2
+session switches without new login. Status/picker text shows the frontend and
+backend. Only optional frontend display metadata is saved on the existing backend
+session; there is no separate alias store. See [QUERYING.md](QUERYING.md).
 
 ```text
 bun helper/cli.ts status --origin <origin> --json

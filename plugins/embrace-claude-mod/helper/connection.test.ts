@@ -1,6 +1,6 @@
 // Fake-origin public capability detection and v2 CLI/transport contracts.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { CONNECTION_ERROR, CONNECTION_PATH, detectBackend, INITIAL_V2_PROCEDURE, V3_BACKEND, type Backend } from './connection';
+import { CONNECTION_ERROR, CONNECTION_PATH, FRONTEND_POINTER_PATH, resolveConnection, detectBackend, INITIAL_V2_PROCEDURE, V3_BACKEND, type Backend } from './connection';
 import { parseCliArgs, runCommand } from './cli';
 import { setFetchForTests } from './fetch';
 import { assertProcedureName, callQuery } from './trpc';
@@ -212,7 +212,7 @@ describe('backend-aware CLI', () => {
       tokenStore: { ...tokenStore, get: async () => { throw new Error('private-token-read'); } }, stderr: text => err.push(text),
     })).toBe(1);
     expect(err).toEqual([JSON.stringify({ error: CONNECTION_ERROR })]);
-    expect(count).toBe(1);
+    expect(count).toBe(2);
   });
   test('discovery and mutation refusal precede session access or refresh', async () => {
     const requests = stub();
@@ -241,19 +241,136 @@ describe('backend-aware CLI', () => {
     const err: string[] = [];
     expect(await runCommand(parseCliArgs(['describe', '--origin', ORIGIN, INITIAL_V2_PROCEDURE]), { tokenStore, stderr: text => err.push(text) })).toBe(1);
     expect(err.join()).toContain('v3.<module>.<name>');
-    expect(count).toBe(1);
+    expect(count).toBe(2);
   });
   test('404 preserves v3 URL, fresh discovery and query output', async () => {
     const requests: string[] = [];
     setFetchForTests(async (url, init) => {
       requests.push(new URL(url).pathname);
       expect(init?.method).toBe('GET');
-      if (String(url).endsWith(CONNECTION_PATH)) return new Response(null, { status: 404 });
+      if ((String(url).endsWith(CONNECTION_PATH) || String(url).endsWith(FRONTEND_POINTER_PATH))) return new Response(null, { status: 404 });
       return Response.json({ result: { data: { json: { items: [] } } } });
     });
     const out: string[] = [];
     expect(await runCommand(parseCliArgs(['call', '--origin', ORIGIN, 'v3.agent.listThreads', '{}']), { tokenStore, stdout: text => out.push(text) })).toBe(0);
-    expect(requests).toEqual([CONNECTION_PATH, `/trpc/${DESCRIBE_QUERY}`, '/trpc/v3.agent.listThreads']);
+    expect(requests).toEqual([CONNECTION_PATH, FRONTEND_POINTER_PATH, `/trpc/${DESCRIBE_QUERY}`, '/trpc/v3.agent.listThreads']);
     expect(JSON.parse(out[0]!)).toEqual({ items: [] });
   });
+});
+
+
+const FRONTEND = 'https://frontend.example.test';
+const pointerFixture = () => ({ product: 'embrace-v2', kind: 'frontend-pointer', version: 1,
+  instance: { id: 'fixture-instance' }, backendOrigin: ORIGIN });
+const boundDocument = () => ({ ...fixture(), approvalMode: 'review-split-origin', frontendOrigins: [FRONTEND] });
+
+describe('frontend pointer mutual binding', () => {
+  function install(options: { initial?: () => Response; pointer?: unknown; document?: unknown } = {}) {
+    const requests: string[] = [];
+    setFetchForTests(async (url, init) => {
+      requests.push(String(url));
+      expect(init?.method).toBe('GET');
+      expect(init?.credentials).toBe('omit');
+      expect(init?.redirect).toBe('error');
+      expect(init?.headers).toBeUndefined();
+      if (String(url) === `${FRONTEND}${CONNECTION_PATH}`) return options.initial?.() ?? new Response(null, { status: 404 });
+      if (String(url) === `${FRONTEND}${FRONTEND_POINTER_PATH}`) return Response.json(options.pointer ?? pointerFixture());
+      if (String(url) === `${ORIGIN}${CONNECTION_PATH}`) return Response.json(options.document ?? boundDocument());
+      throw new Error('Unexpected request');
+    });
+    return requests;
+  }
+  test('resolves a single mutually bound pointer after 404 or HTML without credentials', async () => {
+    for (const initial of [() => new Response(null, { status: 404 }), () => new Response('<html>SPA</html>')]) {
+      const requests = install({ initial });
+      expect(await resolveConnection(FRONTEND)).toEqual({ origin: ORIGIN, frontendOrigin: FRONTEND, backend });
+      expect(requests).toEqual([`${FRONTEND}${CONNECTION_PATH}`, `${FRONTEND}${FRONTEND_POINTER_PATH}`, `${ORIGIN}${CONNECTION_PATH}`]);
+    }
+  });
+  test('valid direct v2 backend never probes a pointer', async () => {
+    const requests = install();
+    expect(await resolveConnection(ORIGIN)).toEqual({ origin: ORIGIN, backend });
+    expect(requests).toEqual([`${ORIGIN}${CONNECTION_PATH}`]);
+  });
+  test('absent pointer preserves original 404 or HTML/malformed document outcomes', async () => {
+    for (const [initial, expected] of [
+      [() => new Response(null, { status: 404 }), 'v3'],
+      [() => new Response('<html>SPA</html>'), 'error'],
+      [() => Response.json({ product: 'unknown' }), 'error'],
+      [() => new Response(null, { status: 500 }), 'error'],
+    ] as const) {
+      const requests: string[] = [];
+      setFetchForTests(async url => {
+        requests.push(String(url));
+        return String(url).endsWith(FRONTEND_POINTER_PATH) ? new Response(null, { status: 404 }) : initial();
+      });
+      if (expected === 'v3') expect(await resolveConnection(FRONTEND)).toEqual({ origin: FRONTEND, backend: V3_BACKEND });
+      else await expect(resolveConnection(FRONTEND)).rejects.toThrow(CONNECTION_ERROR);
+      expect(requests).toHaveLength(2);
+    }
+  });
+  test('additional frontend members are allowed; normalized entered origin must be an exact member', async () => {
+    install({ document: { ...boundDocument(), frontendOrigins: ['https://other.example.test', FRONTEND] } });
+    expect((await resolveConnection(FRONTEND)).origin).toBe(ORIGIN);
+  });
+  const invalidPointers: [string, () => unknown][] = [
+    ['unknown product', () => ({ ...pointerFixture(), product: 'other' })],
+    ['wrong kind', () => ({ ...pointerFixture(), kind: 'backend' })],
+    ['wrong version', () => ({ ...pointerFixture(), version: 2 })],
+    ['string version', () => ({ ...pointerFixture(), version: '1' })],
+    ['extra field', () => ({ ...pointerFixture(), extra: true })],
+    ['missing field', () => { const { version, ...rest } = pointerFixture(); return rest; }],
+    ['extra instance field', () => ({ ...pointerFixture(), instance: { id: 'fixture-instance', extra: true } })],
+    ['empty id', () => ({ ...pointerFixture(), instance: { id: ' ' } })],
+    ['array instance', () => ({ ...pointerFixture(), instance: [] })],
+    ['array pointer', () => []],
+    ...['http://backend.example.test', `${ORIGIN}/`, `${ORIGIN}/path`, `${ORIGIN}?x=1`, `${ORIGIN}#x`,
+      'https://user:password@example.test', 'https://example.test:443', FRONTEND, '/relative', 'not a URL']
+      .map(origin => [`target ${origin}`, () => ({ ...pointerFixture(), backendOrigin: origin })] as [string, () => unknown]),
+  ];
+  for (const [name, pointer] of invalidPointers) test(`rejects pointer ${name}`, async () => {
+    const requests = install({ pointer: pointer() });
+    await expect(resolveConnection(FRONTEND)).rejects.toThrow(CONNECTION_ERROR);
+    expect(requests).toHaveLength(2);
+  });
+  const invalidBindings: [string, () => unknown][] = [
+    ['id mismatch', () => ({ ...boundDocument(), instance: { id: 'other-fixture' } })],
+    ['missing frontendOrigins', () => ({ ...fixture(), approvalMode: 'review-split-origin' })],
+    ['empty frontendOrigins', () => ({ ...boundDocument(), frontendOrigins: [] })],
+    ['wrong frontend', () => ({ ...boundDocument(), frontendOrigins: ['https://other.example.test'] })],
+    ['nonexact frontend', () => ({ ...boundDocument(), frontendOrigins: [`${FRONTEND}/`] })],
+    ['string frontendOrigins', () => ({ ...boundDocument(), frontendOrigins: FRONTEND })],
+    ['wrong approval mode', () => ({ ...boundDocument(), approvalMode: 'app-origin' })],
+    ['issuer mismatch', () => ({ ...boundDocument(), issuer: `${FRONTEND}/api/auth` })],
+    ['API mismatch', () => ({ ...boundDocument(), api: { ...fixture().api, baseUrl: FRONTEND } })],
+    ['chain', () => pointerFixture()],
+  ];
+  for (const [name, document] of invalidBindings) test(`rejects binding ${name} without following a second pointer`, async () => {
+    const requests = install({ document: document() });
+    await expect(resolveConnection(FRONTEND)).rejects.toThrow(CONNECTION_ERROR);
+    expect(requests).toHaveLength(3);
+    expect(requests).not.toContain(`${ORIGIN}${FRONTEND_POINTER_PATH}`);
+  });
+  for (const stage of ['pointer', 'backend']) {
+    for (const mode of ['404', 'redirect', 'followed', 'wrong-url', 'HTML', 'network', '503']) {
+      test(`${stage} ${mode} fails closed (404 pointer alone retains v3)`, async () => {
+        let count = 0;
+        setFetchForTests(async url => {
+          count++;
+          if (String(url) === `${FRONTEND}${CONNECTION_PATH}`) return new Response(null, { status: 404 });
+          if (stage === 'backend' && String(url).endsWith(FRONTEND_POINTER_PATH)) return Response.json(pointerFixture());
+          if (mode === 'network') throw new Error('private-network-diagnostic');
+          if (mode === 'HTML') return new Response('<html>SPA</html>');
+          if (mode === 'redirect') return new Response(null, { status: 302, headers: { Location: ORIGIN } });
+          if (mode === '404' || mode === '503') return new Response(null, { status: Number(mode) });
+          const response = Response.json(stage === 'pointer' ? pointerFixture() : boundDocument());
+          Object.defineProperty(response, mode === 'followed' ? 'redirected' : 'url', { value: mode === 'followed' ? true : 'https://other.example.test' });
+          return response;
+        });
+        if (stage === 'pointer' && mode === '404') expect((await resolveConnection(FRONTEND)).backend).toEqual(V3_BACKEND);
+        else await expect(resolveConnection(FRONTEND)).rejects.toThrow(CONNECTION_ERROR);
+        expect(count).toBe(stage === 'pointer' ? 2 : 3);
+      });
+    }
+  }
 });

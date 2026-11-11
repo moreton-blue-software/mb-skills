@@ -24,7 +24,9 @@ Do not use this skill for direct Cognito auth, direct upstream infrastructure cr
 This proxy contract is separate from Embrace Claude Mod. The Mod now supports
 GET-only queries on v2 backends with verified same-origin connection metadata;
 its initial advertised query is `core.auth.getUserSession` with required `{}`
-input. The Mod has no v2 procedure discovery/describe or mutation lane. Never
+input. The Mod can accept a frontend URL through a verified static pointer with
+mutual backend binding; its session and OAuth remain backend-origin-only.
+The Mod has no v2 procedure discovery/describe or mutation lane. Never
 reuse this skill's proxy token, POST actions or schema endpoints to bypass a Mod
 refusal. See the Mod's [query guide](../../plugins/embrace-claude-mod/QUERYING.md).
 
