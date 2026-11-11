@@ -1,6 +1,6 @@
 // Fake-origin public capability detection and v2 CLI/transport contracts.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { CONNECTION_ERROR, CONNECTION_PATH, detectBackend, INITIAL_V2_PROCEDURE, V3_BACKEND, type Backend } from './connection';
+import { CONNECTION_ERROR, CONNECTION_PATH, FRONTEND_POINTER_PATH, resolveConnection, detectBackend, INITIAL_V2_PROCEDURE, V3_BACKEND, type Backend } from './connection';
 import { parseCliArgs, runCommand } from './cli';
 import { setFetchForTests } from './fetch';
 import { assertProcedureName, callQuery } from './trpc';
@@ -24,7 +24,7 @@ describe('connection detection', () => {
       count++;
       expect(String(url)).toBe(`${ORIGIN}${CONNECTION_PATH}`);
       expect(init?.method).toBe('GET');
-      expect(init?.redirect).toBe('error');
+      expect(init?.redirect).toBe('manual');
       expect(init?.credentials).toBe('omit');
       expect(init?.headers).toBeUndefined();
       expect(init?.body).toBeUndefined();
@@ -71,7 +71,7 @@ describe('connection detection', () => {
   for (const status of [204, 301, 302, 307, 308, 400, 401, 403, 429, 500, 503]) {
     test(`fails closed: HTTP ${status}`, async () => {
       setFetchForTests(async () => new Response(null, { status, headers: { Location: 'https://other.example.test' } }));
-      await expect(detectBackend(ORIGIN)).rejects.toThrow(CONNECTION_ERROR);
+      await expect(detectBackend(ORIGIN)).rejects.toThrow(status >= 500 ? 'Embrace backend unavailable (server error); try again' : CONNECTION_ERROR);
     });
   }
   test('rejects followed redirects even when a fetch implementation returns 200 or 404', async () => {
@@ -93,7 +93,7 @@ describe('connection detection', () => {
     await expect(detectBackend(ORIGIN)).rejects.toThrow(CONNECTION_ERROR);
   });
   test('malformed JSON and network errors expose only the fixed error', async () => {
-    for (const stub of [async () => new Response('private-invalid-json'), async () => { throw new Error('private-network-diagnostic'); }]) {
+    for (const stub of [async () => new Response('private-invalid-json')]) {
       setFetchForTests(stub);
       await expect(detectBackend(ORIGIN)).rejects.toThrow(CONNECTION_ERROR);
     }
@@ -212,7 +212,7 @@ describe('backend-aware CLI', () => {
       tokenStore: { ...tokenStore, get: async () => { throw new Error('private-token-read'); } }, stderr: text => err.push(text),
     })).toBe(1);
     expect(err).toEqual([JSON.stringify({ error: CONNECTION_ERROR })]);
-    expect(count).toBe(1);
+    expect(count).toBe(2);
   });
   test('discovery and mutation refusal precede session access or refresh', async () => {
     const requests = stub();
@@ -241,19 +241,199 @@ describe('backend-aware CLI', () => {
     const err: string[] = [];
     expect(await runCommand(parseCliArgs(['describe', '--origin', ORIGIN, INITIAL_V2_PROCEDURE]), { tokenStore, stderr: text => err.push(text) })).toBe(1);
     expect(err.join()).toContain('v3.<module>.<name>');
-    expect(count).toBe(1);
+    expect(count).toBe(2);
   });
   test('404 preserves v3 URL, fresh discovery and query output', async () => {
     const requests: string[] = [];
     setFetchForTests(async (url, init) => {
       requests.push(new URL(url).pathname);
       expect(init?.method).toBe('GET');
-      if (String(url).endsWith(CONNECTION_PATH)) return new Response(null, { status: 404 });
+      if ((String(url).endsWith(CONNECTION_PATH) || String(url).endsWith(FRONTEND_POINTER_PATH))) return new Response(null, { status: 404 });
       return Response.json({ result: { data: { json: { items: [] } } } });
     });
     const out: string[] = [];
     expect(await runCommand(parseCliArgs(['call', '--origin', ORIGIN, 'v3.agent.listThreads', '{}']), { tokenStore, stdout: text => out.push(text) })).toBe(0);
-    expect(requests).toEqual([CONNECTION_PATH, `/trpc/${DESCRIBE_QUERY}`, '/trpc/v3.agent.listThreads']);
+    expect(requests).toEqual([CONNECTION_PATH, FRONTEND_POINTER_PATH, `/trpc/${DESCRIBE_QUERY}`, '/trpc/v3.agent.listThreads']);
     expect(JSON.parse(out[0]!)).toEqual({ items: [] });
   });
+});
+
+
+const FRONTEND = 'https://frontend.example.test';
+const pointerFixture = () => ({ product: 'embrace-v2', kind: 'frontend-pointer', version: 1,
+  instance: { id: 'fixture-instance' }, backendOrigin: ORIGIN });
+const boundDocument = () => ({ ...fixture(), approvalMode: 'review-split-origin', frontendOrigins: [FRONTEND] });
+
+describe('frontend pointer mutual binding', () => {
+  function install(options: { initial?: () => Response; pointer?: unknown; document?: unknown } = {}) {
+    const requests: string[] = [];
+    setFetchForTests(async (url, init) => {
+      requests.push(String(url));
+      expect(init?.method).toBe('GET');
+      expect(init?.credentials).toBe('omit');
+      expect(init?.redirect).toBe('manual');
+      expect(init?.headers).toBeUndefined();
+      if (String(url) === `${FRONTEND}${CONNECTION_PATH}`) return options.initial?.() ?? new Response(null, { status: 404 });
+      if (String(url) === `${FRONTEND}${FRONTEND_POINTER_PATH}`) return Response.json(options.pointer ?? pointerFixture());
+      if (String(url) === `${ORIGIN}${CONNECTION_PATH}`) return Response.json(options.document ?? boundDocument());
+      throw new Error('Unexpected request');
+    });
+    return requests;
+  }
+  test('resolves a single mutually bound pointer after 404 or HTML without credentials', async () => {
+    for (const initial of [() => new Response(null, { status: 404 }), () => new Response('<html>SPA</html>')]) {
+      const requests = install({ initial });
+      expect(await resolveConnection(FRONTEND)).toEqual({ origin: ORIGIN, frontendOrigin: FRONTEND, backend });
+      expect(requests).toEqual([`${FRONTEND}${CONNECTION_PATH}`, `${FRONTEND}${FRONTEND_POINTER_PATH}`, `${ORIGIN}${CONNECTION_PATH}`]);
+    }
+  });
+  test('valid direct v2 backend never probes a pointer', async () => {
+    const requests = install();
+    expect(await resolveConnection(ORIGIN)).toEqual({ origin: ORIGIN, backend });
+    expect(requests).toEqual([`${ORIGIN}${CONNECTION_PATH}`]);
+  });
+  test('absent pointer preserves original 404 or HTML/malformed document outcomes', async () => {
+    for (const [initial, expected] of [
+      [() => new Response(null, { status: 404 }), 'v3'],
+      [() => new Response('<html>SPA</html>'), 'error'],
+      [() => Response.json({ product: 'unknown' }), 'error'],
+      [() => new Response(null, { status: 400 }), 'error'],
+    ] as const) {
+      const requests: string[] = [];
+      setFetchForTests(async url => {
+        requests.push(String(url));
+        return String(url).endsWith(FRONTEND_POINTER_PATH) ? new Response(null, { status: 404 }) : initial();
+      });
+      if (expected === 'v3') expect(await resolveConnection(FRONTEND)).toEqual({ origin: FRONTEND, backend: V3_BACKEND });
+      else await expect(resolveConnection(FRONTEND)).rejects.toThrow(CONNECTION_ERROR);
+      expect(requests).toHaveLength(2);
+    }
+  });
+  test('additional frontend members are allowed; normalized entered origin must be an exact member', async () => {
+    install({ document: { ...boundDocument(), frontendOrigins: ['https://other.example.test', FRONTEND] } });
+    expect((await resolveConnection(FRONTEND)).origin).toBe(ORIGIN);
+  });
+  const invalidPointers: [string, () => unknown][] = [
+    ['unknown product', () => ({ ...pointerFixture(), product: 'other' })],
+    ['wrong kind', () => ({ ...pointerFixture(), kind: 'backend' })],
+    ['wrong version', () => ({ ...pointerFixture(), version: 2 })],
+    ['string version', () => ({ ...pointerFixture(), version: '1' })],
+    ['extra field', () => ({ ...pointerFixture(), extra: true })],
+    ['missing field', () => { const { version, ...rest } = pointerFixture(); return rest; }],
+    ['extra instance field', () => ({ ...pointerFixture(), instance: { id: 'fixture-instance', extra: true } })],
+    ['empty id', () => ({ ...pointerFixture(), instance: { id: ' ' } })],
+    ['array instance', () => ({ ...pointerFixture(), instance: [] })],
+    ['array pointer', () => []],
+    ...['http://backend.example.test', `${ORIGIN}/`, `${ORIGIN}/path`, `${ORIGIN}?x=1`, `${ORIGIN}#x`,
+      'https://user:password@example.test', 'https://example.test:443', FRONTEND, '/relative', 'not a URL']
+      .map(origin => [`target ${origin}`, () => ({ ...pointerFixture(), backendOrigin: origin })] as [string, () => unknown]),
+  ];
+  for (const [name, pointer] of invalidPointers) test(`rejects pointer ${name}`, async () => {
+    const requests = install({ pointer: pointer() });
+    await expect(resolveConnection(FRONTEND)).rejects.toThrow(CONNECTION_ERROR);
+    expect(requests).toHaveLength(2);
+  });
+  const invalidBindings: [string, () => unknown][] = [
+    ['id mismatch', () => ({ ...boundDocument(), instance: { id: 'other-fixture' } })],
+    ['missing frontendOrigins', () => ({ ...fixture(), approvalMode: 'review-split-origin' })],
+    ['empty frontendOrigins', () => ({ ...boundDocument(), frontendOrigins: [] })],
+    ['wrong frontend', () => ({ ...boundDocument(), frontendOrigins: ['https://other.example.test'] })],
+    ['nonexact frontend', () => ({ ...boundDocument(), frontendOrigins: [`${FRONTEND}/`] })],
+    ['string frontendOrigins', () => ({ ...boundDocument(), frontendOrigins: FRONTEND })],
+    ['wrong approval mode', () => ({ ...boundDocument(), approvalMode: 'app-origin' })],
+    ['issuer mismatch', () => ({ ...boundDocument(), issuer: `${FRONTEND}/api/auth` })],
+    ['API mismatch', () => ({ ...boundDocument(), api: { ...fixture().api, baseUrl: FRONTEND } })],
+    ['chain', () => pointerFixture()],
+  ];
+  for (const [name, document] of invalidBindings) test(`rejects binding ${name} without following a second pointer`, async () => {
+    const requests = install({ document: document() });
+    await expect(resolveConnection(FRONTEND)).rejects.toThrow(CONNECTION_ERROR);
+    expect(requests).toHaveLength(3);
+    expect(requests).not.toContain(`${ORIGIN}${FRONTEND_POINTER_PATH}`);
+  });
+  for (const stage of ['pointer', 'backend']) {
+    for (const mode of ['404', 'redirect', 'followed', 'wrong-url', 'HTML', 'network', '503']) {
+      test(`${stage} ${mode} fails closed (404 pointer alone retains v3)`, async () => {
+        let count = 0;
+        setFetchForTests(async url => {
+          count++;
+          if (String(url) === `${FRONTEND}${CONNECTION_PATH}`) return new Response(null, { status: 404 });
+          if (stage === 'backend' && String(url).endsWith(FRONTEND_POINTER_PATH)) return Response.json(pointerFixture());
+          if (mode === 'network') throw new Error('private-network-diagnostic');
+          if (mode === 'HTML') return new Response('<html>SPA</html>');
+          if (mode === 'redirect') return new Response(null, { status: 302, headers: { Location: ORIGIN } });
+          if (mode === '404' || mode === '503') return new Response(null, { status: Number(mode) });
+          const response = Response.json(stage === 'pointer' ? pointerFixture() : boundDocument());
+          Object.defineProperty(response, mode === 'followed' ? 'redirected' : 'url', { value: mode === 'followed' ? true : 'https://other.example.test' });
+          return response;
+        });
+        if (stage === 'pointer' && mode === '404') expect((await resolveConnection(FRONTEND)).backend).toEqual(V3_BACKEND);
+        else await expect(resolveConnection(FRONTEND)).rejects.toThrow(mode === 'network' || mode === '503' ? 'Embrace backend unavailable' : CONNECTION_ERROR);
+        expect(count).toBe((stage === 'pointer' ? 2 : 3) + (mode === 'network' || mode === '503' ? 1 : 0));
+      });
+    }
+  }
+});
+
+
+describe('bounded discovery availability', () => {
+  test('timeout once then valid document succeeds without falling back', async () => {
+    let count = 0;
+    setFetchForTests(async url => {
+      expect(String(url)).toBe(`${ORIGIN}${CONNECTION_PATH}`);
+      if (++count === 1) throw new DOMException('private-timeout-diagnostic', 'TimeoutError');
+      return Response.json(fixture());
+    });
+    expect(await detectBackend(ORIGIN)).toEqual(backend);
+    expect(count).toBe(2);
+  });
+  for (const reason of ['timeout', 'network', 'server']) test(`${reason} has a fixed retryable diagnostic, never v3 or malformed fallback`, async () => {
+    let count = 0;
+    setFetchForTests(async () => {
+      count++;
+      if (reason === 'server') return new Response(null, { status: 503 });
+      throw reason === 'timeout' ? new DOMException('private', 'TimeoutError') : new TypeError('private');
+    });
+    await expect(resolveConnection(ORIGIN)).rejects.toThrow(reason === 'timeout'
+      ? 'Embrace backend unavailable (timed out); try again'
+      : `Embrace backend unavailable (${reason} error); try again`);
+    expect(count).toBe(2);
+  });
+  test('malformed JSON remains contract error with absent pointer and is not retried', async () => {
+    const requests: string[] = [];
+    setFetchForTests(async url => {
+      requests.push(String(url));
+      return String(url).endsWith(FRONTEND_POINTER_PATH) ? new Response(null, { status: 404 }) : new Response('<html>SPA</html>');
+    });
+    await expect(resolveConnection(ORIGIN)).rejects.toThrow(CONNECTION_ERROR);
+    expect(requests).toEqual([`${ORIGIN}${CONNECTION_PATH}`, `${ORIGIN}${FRONTEND_POINTER_PATH}`]);
+  });
+  test('pointer and bound backend reads each tolerate one timeout, without chains', async () => {
+    const counts = new Map<string, number>();
+    setFetchForTests(async url => {
+      const key = String(url), count = (counts.get(key) ?? 0) + 1;
+      counts.set(key, count);
+      if (key === `${FRONTEND}${CONNECTION_PATH}`) return new Response(null, { status: 404 });
+      if (count === 1) throw new DOMException('private', 'TimeoutError');
+      return Response.json(key.endsWith(FRONTEND_POINTER_PATH) ? pointerFixture() : boundDocument());
+    });
+    expect((await resolveConnection(FRONTEND)).origin).toBe(ORIGIN);
+    expect([...counts.values()]).toEqual([1, 2, 2]);
+  });
+});
+
+
+test('an unavailable attempt followed by 404 cannot silently select v3', async () => {
+  for (const failure of ['timeout', 'server']) {
+    let count = 0;
+    setFetchForTests(async () => {
+      if (++count === 1) {
+        if (failure === 'timeout') throw new DOMException('private', 'TimeoutError');
+        return new Response(null, { status: 503 });
+      }
+      return new Response(null, { status: 404 });
+    });
+    await expect(resolveConnection(ORIGIN)).rejects.toThrow('Embrace backend unavailable');
+    expect(count).toBe(2);
+  }
 });

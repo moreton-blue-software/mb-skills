@@ -6,6 +6,7 @@
 export interface SessionRow {
   origin: string;
   email: string | null;
+  frontendOrigin?: string;
   accessTokenValid: boolean;
 }
 
@@ -19,13 +20,14 @@ export function parseSessions(value: unknown): SessionRow[] {
       !!entry && typeof entry === 'object'
       && typeof (entry as SessionRow).origin === 'string'
       && ((entry as SessionRow).email === null || typeof (entry as SessionRow).email === 'string')
+      && ((entry as SessionRow).frontendOrigin === undefined || typeof (entry as SessionRow).frontendOrigin === 'string')
       && typeof (entry as SessionRow).accessTokenValid === 'boolean',
   );
 }
 
 /** Picker label for a connected instance, e.g. `app.example.test — user@example.test`. */
 export function sessionLabel(session: SessionRow): string {
-  const host = hostOf(session.origin);
+  const host = sessionLocation(session);
   return session.email ? `${host} — ${session.email}` : `${host} — signed in`;
 }
 
@@ -36,7 +38,7 @@ export function sessionLabel(session: SessionRow): string {
  * helper call, so the line keeps showing the instance the user chose.
  */
 export function pickStatusSession(sessions: readonly SessionRow[], activeOrigin: unknown): SessionRow | null {
-  const active = typeof activeOrigin === 'string' ? sessions.find(session => session.origin === activeOrigin) : undefined;
+  const active = typeof activeOrigin === 'string' ? sessions.find(session => (session.origin === activeOrigin || session.frontendOrigin === activeOrigin)) : undefined;
   return active ?? sessions.find(session => session.accessTokenValid) ?? null;
 }
 
@@ -48,7 +50,7 @@ export function pickStatusSession(sessions: readonly SessionRow[], activeOrigin:
 export function connectPickerOptions(sessions: readonly SessionRow[], activeOrigin: unknown): string[] {
   if (sessions.length === 0) return [];
   const active = typeof activeOrigin === 'string' ? activeOrigin : '';
-  const ordered = [...sessions].sort((a, b) => Number(b.origin === active) - Number(a.origin === active));
+  const ordered = [...sessions].sort((a, b) => Number(b.origin === active || b.frontendOrigin === active) - Number(a.origin === active || a.frontendOrigin === active));
   return [...ordered.slice(0, 3).map(sessionLabel), ADD_ANOTHER];
 }
 
@@ -58,4 +60,9 @@ function hostOf(origin: string): string {
   } catch {
     return origin;
   }
+}
+
+/** Display metadata never determines the helper's authentication target. */
+export function sessionLocation(session: Pick<SessionRow, 'origin' | 'frontendOrigin'>): string {
+  return session.frontendOrigin ? `${hostOf(session.frontendOrigin)} (backend ${hostOf(session.origin)})` : hostOf(session.origin);
 }

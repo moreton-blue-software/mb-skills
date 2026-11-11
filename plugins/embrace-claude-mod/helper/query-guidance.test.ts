@@ -54,6 +54,8 @@ describe('installed query instructions', () => {
     expect(text).toContain('Only a 404 connection document selects legacy v3');
     expect(guide).toContain('GET `<api.baseUrl>/<procedure>`');
     expect(guide).toContain('V2 inputs stay plain JSON');
+    expect(text).toContain('fresh mutual backend binding before OAuth or API access');
+    expect(guide).toContain('It never follows a second pointer.');
     expect(guide).toContain('a direct POST or another identity');
   });
 

@@ -3,12 +3,12 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { parseCliArgs, runCommand } from './cli';
 import { DESCRIBE_MUTATION, LIST_MUTATIONS } from './discovery';
 import { setFetchForTests as setRawFetchForTests } from './fetch';
-import { CONNECTION_PATH } from './connection';
+import { CONNECTION_PATH, FRONTEND_POINTER_PATH } from './connection';
 import { executeReviewedMutation } from './mutations';
 
 // Keep authenticated v3 request assertions behind an explicit 404 capability probe.
 function setFetchForTests(stub?: Parameters<typeof setRawFetchForTests>[0]) {
-  setRawFetchForTests(stub && ((url, init) => String(url).endsWith(CONNECTION_PATH)
+  setRawFetchForTests(stub && ((url, init) => (String(url).endsWith(CONNECTION_PATH) || String(url).endsWith(FRONTEND_POINTER_PATH))
     ? Promise.resolve(new Response(null, { status: 404 })) : stub(url, init)));
 }
 

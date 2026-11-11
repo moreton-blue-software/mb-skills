@@ -122,3 +122,53 @@ test('failed code exchange leaves the pane available to retry or close', async (
   expect(await ui.find({ key: 'close-login' })).toBeDefined();
   await ui.unmount();
 });
+
+
+test('connect with either URL switches one resolved backend session without opening a pane', async ($, on) => {
+  const backend = 'https://backend.example.test';
+  const frontend = 'https://frontend.example.test';
+  const calls: string[][] = [], statuses: string[] = [];
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }));
+  on('process.run', (_, e) => {
+    calls.push([...e.argv]);
+    return processResult(JSON.stringify({ origin: backend, frontendOrigin: frontend, email: null, connected: true }));
+  });
+  on('store.set', (_, e) => { expect(e.value).toBe(backend); return { value: undefined }; });
+  on('ui.status', (_, e) => { statuses.push(e.text ?? ''); return { value: undefined }; });
+  on('ui.toast', () => ({ value: undefined }));
+  on('ui.open', () => { throw new Error('Unexpected login pane'); });
+  for (const url of [frontend, backend]) {
+    const result = await $.command.run({ command: 'embrace-connect', args: url,
+      origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } });
+    expect(JSON.stringify(result)).toContain('Switched to');
+  }
+  expect(calls).toHaveLength(2);
+  expect(calls.every(argv => argv.includes('--url-only'))).toBe(true);
+  expect(statuses.every(text => text.includes('frontend.example.test (backend backend.example.test)'))).toBe(true);
+});
+
+test('frontend login uses the backend authorize URL and shows both origins after completion', async ($, on) => {
+  const backend = 'https://backend.example.test';
+  const frontend = 'https://frontend.example.test';
+  const calls: string[][] = [], statuses: string[] = [];
+  on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }));
+  on('process.run', (_, e) => {
+    calls.push([...e.argv]);
+    expect(e.init?.timeoutMs).toBe(360_000); // Durable bounded resolution/exchange budget.
+    return processResult(JSON.stringify(e.argv.includes('--complete')
+      ? { origin: backend, frontendOrigin: frontend, email: null }
+      : { origin: backend, frontendOrigin: frontend, authorizeUrl: `${backend}/authorize?dummy=public` }));
+  });
+  on('ui.open', () => ({ value: { isPlaced: true } }));
+  on('store.set', () => ({ value: undefined }));
+  on('ui.status', (_, e) => { statuses.push(e.text ?? ''); return { value: undefined }; });
+  on('ui.toast', () => ({ value: undefined }));
+  on('ui.close', () => ({ value: undefined }));
+  await $.command.run({ command: 'embrace-connect', args: frontend,
+    origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } });
+  const ui = await $.ui.mount({ ...pane, surface: 'terminal' });
+  await ui.input({ key: 'paste-code', text: 'synthetic-test-code' });
+  expect(calls[1]).toContain(frontend); // Helper re-verifies binding before exchange.
+  expect(statuses.at(-1)).toContain('frontend.example.test (backend backend.example.test)');
+  await ui.unmount();
+});
