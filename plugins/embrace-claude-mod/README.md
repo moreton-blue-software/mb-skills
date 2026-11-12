@@ -136,7 +136,9 @@ v3 behavior; malformed metadata, issuer/API-origin disagreement and every other
 failure stop without fallback. Unavailability is reported separately from invalid metadata. The issuer must exactly match `<origin>/api/auth`.
 Metadata is fetched fresh and never cached. A frontend URL is accepted when its
 static `/.well-known/embrace-connection.json` pointer and the target backend
-mutually bind the same instance and frontend origin in `review-split-origin` mode.
+mutually bind the same instance and frontend origin in `split-origin` or
+`review-split-origin` mode. Both require the same issuer/backend/API origin
+and identical instance/frontend binding; unknown modes remain rejected.
 Pointers use an exact version-1 shape and HTTPS backend origin, with no extra
 fields, redirects or chains. A missing pointer preserves the original document
 outcome, including HTML/SPA errors. A present invalid pointer fails closed.

@@ -262,7 +262,7 @@ describe('backend-aware CLI', () => {
 const FRONTEND = 'https://frontend.example.test';
 const pointerFixture = () => ({ product: 'embrace-v2', kind: 'frontend-pointer', version: 1,
   instance: { id: 'fixture-instance' }, backendOrigin: ORIGIN });
-const boundDocument = () => ({ ...fixture(), approvalMode: 'review-split-origin', frontendOrigins: [FRONTEND] });
+const boundDocument = (approvalMode = 'review-split-origin') => ({ ...fixture(), approvalMode, frontendOrigins: [FRONTEND] });
 
 describe('frontend pointer mutual binding', () => {
   function install(options: { initial?: () => Response; pointer?: unknown; document?: unknown } = {}) {
@@ -280,9 +280,9 @@ describe('frontend pointer mutual binding', () => {
     });
     return requests;
   }
-  test('resolves a single mutually bound pointer after 404 or HTML without credentials', async () => {
+  for (const approvalMode of ['review-split-origin', 'split-origin']) test(`${approvalMode}: resolves a single mutually bound pointer after 404 or HTML without credentials`, async () => {
     for (const initial of [() => new Response(null, { status: 404 }), () => new Response('<html>SPA</html>')]) {
-      const requests = install({ initial });
+      const requests = install({ initial, document: boundDocument(approvalMode) });
       expect(await resolveConnection(FRONTEND)).toEqual({ origin: ORIGIN, frontendOrigin: FRONTEND, backend });
       expect(requests).toEqual([`${FRONTEND}${CONNECTION_PATH}`, `${FRONTEND}${FRONTEND_POINTER_PATH}`, `${ORIGIN}${CONNECTION_PATH}`]);
     }
@@ -309,8 +309,8 @@ describe('frontend pointer mutual binding', () => {
       expect(requests).toHaveLength(2);
     }
   });
-  test('additional frontend members are allowed; normalized entered origin must be an exact member', async () => {
-    install({ document: { ...boundDocument(), frontendOrigins: ['https://other.example.test', FRONTEND] } });
+  for (const approvalMode of ['review-split-origin', 'split-origin']) test(`${approvalMode}: additional frontend members are allowed; normalized entered origin must be an exact member`, async () => {
+    install({ document: { ...boundDocument(approvalMode), frontendOrigins: ['https://other.example.test', FRONTEND] } });
     expect((await resolveConnection(FRONTEND)).origin).toBe(ORIGIN);
   });
   const invalidPointers: [string, () => unknown][] = [
@@ -341,16 +341,20 @@ describe('frontend pointer mutual binding', () => {
     ['nonexact frontend', () => ({ ...boundDocument(), frontendOrigins: [`${FRONTEND}/`] })],
     ['string frontendOrigins', () => ({ ...boundDocument(), frontendOrigins: FRONTEND })],
     ['wrong approval mode', () => ({ ...boundDocument(), approvalMode: 'app-origin' })],
+    ['unknown approval mode', () => ({ ...boundDocument(), approvalMode: 'unknown' })],
     ['issuer mismatch', () => ({ ...boundDocument(), issuer: `${FRONTEND}/api/auth` })],
     ['API mismatch', () => ({ ...boundDocument(), api: { ...fixture().api, baseUrl: FRONTEND } })],
     ['chain', () => pointerFixture()],
   ];
-  for (const [name, document] of invalidBindings) test(`rejects binding ${name} without following a second pointer`, async () => {
-    const requests = install({ document: document() });
-    await expect(resolveConnection(FRONTEND)).rejects.toThrow(CONNECTION_ERROR);
-    expect(requests).toHaveLength(3);
-    expect(requests).not.toContain(`${ORIGIN}${FRONTEND_POINTER_PATH}`);
-  });
+  for (const approvalMode of ['review-split-origin', 'split-origin']) {
+    for (const [name, document] of invalidBindings) test(`${approvalMode}: rejects binding ${name} without following a second pointer`, async () => {
+      const candidate = document() as Record<string, unknown>;
+      const requests = install({ document: name.includes('approval mode') || name === 'chain' ? candidate : { ...candidate, approvalMode } });
+      await expect(resolveConnection(FRONTEND)).rejects.toThrow(CONNECTION_ERROR);
+      expect(requests).toHaveLength(3);
+      expect(requests).not.toContain(`${ORIGIN}${FRONTEND_POINTER_PATH}`);
+    });
+  }
   for (const stage of ['pointer', 'backend']) {
     for (const mode of ['404', 'redirect', 'followed', 'wrong-url', 'HTML', 'network', '503']) {
       test(`${stage} ${mode} fails closed (404 pointer alone retains v3)`, async () => {
