@@ -85,6 +85,7 @@ export interface CliArgs {
   urlOnly?: boolean;
   complete?: boolean;
   json?: boolean;
+  loginProgress?: boolean;
   force?: boolean;
 }
 
@@ -161,9 +162,10 @@ export function parseCliArgs(argv: readonly string[]): CliArgs {
     if (command === 'status') {
       const { values } = parseArgs({
         args: rest,
-        options: { origin: { type: 'string' }, json: { type: 'boolean', default: false } },
+        options: { origin: { type: 'string' }, json: { type: 'boolean', default: false }, 'login-progress': { type: 'boolean', default: false } },
       });
-      return { command, origin: values.origin, json: Boolean(values.json) };
+      if (values['login-progress'] && !values.origin) throw new CliError('login progress requires --origin');
+      return { command, origin: values.origin, json: Boolean(values.json), ...(values['login-progress'] ? { loginProgress: true } : {}) };
     }
   } catch (error) {
     if (error instanceof CliError) throw error;
@@ -206,6 +208,7 @@ export async function runCommand(args: CliArgs, context: CliContext = {}): Promi
       case 'logout':
         return await logoutFlow(origin!, args, { tokenStore, now, print, fail });
       case 'status':
+        if (args.loginProgress) return await loginProgressFlow(origin!, { tokenStore, pendingStore, now, print, fail, context });
         return await statusFlow(origin, args, { tokenStore, now, print, fail, context });
     }
   } catch (error) {
@@ -238,8 +241,9 @@ async function loginFlow(connection: Connection, args: CliArgs, flow: FlowContex
   if (args.urlOnly) {
     const { verifier, challenge } = await createPkcePair();
     const state = createState();
-    await pendingStore.put({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), verifier, state, created_at: flow.now() });
-    flow.print({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), authorizeUrl: buildAuthorizeUrl(origin, challenge, state), state });
+    const loginAttemptId = crypto.randomUUID();
+    await pendingStore.put({ origin, loginAttemptId, ...(frontendOrigin ? { frontendOrigin } : {}), verifier, state, created_at: flow.now() });
+    flow.print({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), authorizeUrl: buildAuthorizeUrl(origin, challenge, state), state, loginAttemptId });
     return 0;
   }
 
@@ -250,7 +254,8 @@ async function loginFlow(connection: Connection, args: CliArgs, flow: FlowContex
   // Interactive terminal flow: show the URL, then prompt for the pasted code.
   const { verifier, challenge } = await createPkcePair();
   const state = createState();
-  await pendingStore.put({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), verifier, state, created_at: flow.now() });
+  const loginAttemptId = crypto.randomUUID();
+  await pendingStore.put({ origin, loginAttemptId, ...(frontendOrigin ? { frontendOrigin } : {}), verifier, state, created_at: flow.now() });
   const write = flow.context?.stdout ?? console.log;
   write('');
   write('1. Open this URL in any browser and sign in:');
@@ -277,6 +282,7 @@ async function completeLogin(connection: Connection, pasted: string, flow: FlowC
     const frontendOrigin = connection.frontendOrigin ?? pending.frontendOrigin;
     if (frontendOrigin) stored.frontendOrigin = frontendOrigin;
     stored.revocationEndpoint = revocationEndpointOf(origin);
+    if (pending.loginAttemptId) stored.loginAttemptId = pending.loginAttemptId;
     await flow.tokenStore.put(stored);
     flow.print({ origin, ...(frontendOrigin ? { frontendOrigin } : {}), email: stored.email });
     return 0;
@@ -351,6 +357,7 @@ async function refreshStoredToken(stored: NonNullable<Awaited<ReturnType<TokenSt
   if (!refreshed.refresh_token) refreshed.refresh_token = stored.refresh_token;
   if (stored.frontendOrigin) refreshed.frontendOrigin = stored.frontendOrigin;
   if (stored.revocationEndpoint) refreshed.revocationEndpoint = stored.revocationEndpoint;
+  if (stored.loginAttemptId) refreshed.loginAttemptId = stored.loginAttemptId;
   await flow.tokenStore.put(refreshed);
   return refreshed.access_token;
 }
@@ -383,6 +390,22 @@ async function logoutFlow(origin: string, args: CliArgs, flow: FlowContext): Pro
   }
   await flow.tokenStore.remove(origin);
   flow.print({ origin, signedOut: true });
+  return 0;
+}
+
+async function loginProgressFlow(origin: string, flow: FlowContext): Promise<number> {
+  const marker = (await readPasted(flow.context)).trim();
+  if (!/^[0-9a-f-]{36}$/.test(marker)) throw new CliError('invalid login progress request');
+  const pending = await flow.pendingStore!.get(origin);
+  if (pending) {
+    flow.print({ progress: pending.loginAttemptId === marker && isPendingFresh(pending, flow.now()) ? 'pending' : 'ended' });
+    return 0;
+  }
+  const token = await flow.tokenStore.get(origin);
+  if (token?.loginAttemptId === marker) {
+    flow.print({ progress: 'completed', session: { origin: token.origin, email: token.email,
+      ...(token.frontendOrigin ? { frontendOrigin: token.frontendOrigin } : {}), accessTokenValid: !isTokenExpired(token, flow.now()) } });
+  } else flow.print({ progress: 'ended' });
   return 0;
 }
 

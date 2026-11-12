@@ -12,6 +12,8 @@ import { join } from 'node:path';
 
 export interface StoredToken {
   origin: string;
+  /** Non-secret completion correlation, independent of OAuth state/code. */
+  loginAttemptId?: string;
   email: string | null;
   /** Verified frontend origin for display only; custody stays keyed by origin. */
   frontendOrigin?: string;
@@ -25,6 +27,8 @@ export interface StoredToken {
 
 export interface PendingLogin {
   origin: string;
+  /** Non-secret completion correlation, independent of OAuth state/code. */
+  loginAttemptId?: string;
   /** Verified display origin survives completion through the backend URL. */
   frontendOrigin?: string;
   verifier: string;
@@ -95,6 +99,7 @@ function isStoredToken(value: unknown): value is StoredToken {
   const entry = value as Record<string, unknown>;
   return typeof entry.origin === 'string'
     && (entry.email === null || typeof entry.email === 'string')
+    && (entry.loginAttemptId === undefined || (typeof entry.loginAttemptId === 'string' && /^[0-9a-f-]{36}$/.test(entry.loginAttemptId)))
     && (entry.frontendOrigin === undefined || typeof entry.frontendOrigin === 'string')
     && (entry.revocationEndpoint === undefined || typeof entry.revocationEndpoint === 'string')
     && typeof entry.access_token === 'string'
@@ -148,6 +153,7 @@ function isPendingLogin(value: unknown): value is PendingLogin {
   if (!value || typeof value !== 'object') return false;
   const entry = value as Record<string, unknown>;
   return typeof entry.origin === 'string'
+    && (entry.loginAttemptId === undefined || (typeof entry.loginAttemptId === 'string' && /^[0-9a-f-]{36}$/.test(entry.loginAttemptId)))
     && (entry.frontendOrigin === undefined || typeof entry.frontendOrigin === 'string')
     && typeof entry.verifier === 'string'
     && typeof entry.state === 'string'

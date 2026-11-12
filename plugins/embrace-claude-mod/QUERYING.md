@@ -28,7 +28,12 @@ already-connected instances, the user runs `/embrace-connect` and picks one;
 switching changes the active instance and status line, never the credentials.
 Never read token/pending-login files, collect a password in chat,
 inspect browser cookies, or construct Authorization headers yourself. The helper
-owns refresh and all credential handling.
+owns refresh and all credential handling. Connected UI status reconciles against
+local helper sessions about every five seconds; logout or session removal clears
+stale identity. Access-token expiry alone is not sign-out. The paste pane can
+recognize exact out-of-band completion of its own pending login for ten minutes,
+without putting codes or OAuth state into the conversation. Do not use the
+helper-internal login-progress protocol as a model-facing login tool.
 
 For Core instances supporting this plugin, the verified identity query is:
 

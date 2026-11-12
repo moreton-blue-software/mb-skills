@@ -295,11 +295,13 @@ describe('frontend URL lifecycle', () => {
     expect(await pending.get(frontend)).toBeNull();
     expect(await pending.get(backendOrigin)).not.toBeNull();
     expect((await pending.get(backendOrigin))?.frontendOrigin).toBe(frontend);
+    expect((await pending.get(backendOrigin))?.loginAttemptId).toBe(started.loginAttemptId);
     expect(await run(['login', '--origin', completionOrigin, '--complete'], { ...ctx, stdin: `synthetic-code ${started.state}` })).toBe(0);
     expect(await tokens.get(frontend)).toBeNull();
     expect((await tokens.list())).toHaveLength(1);
     expect((await tokens.get(backendOrigin))?.frontendOrigin).toBe(frontend);
     expect(await tokens.get(backendOrigin)).not.toHaveProperty('id_token');
+    expect((await tokens.get(backendOrigin))?.loginAttemptId).toBe(started.loginAttemptId);
     expect((await tokens.get(backendOrigin))?.revocationEndpoint).toBe(`${backendOrigin}/api/auth/oauth2/revoke`);
     // Existing backend-only sessions gain display metadata only after verified connect.
     const connected = (await tokens.get(backendOrigin))!;
@@ -327,6 +329,7 @@ describe('frontend URL lifecycle', () => {
     expect((await tokens.get(backendOrigin))?.frontendOrigin).toBe(frontend);
     expect((await tokens.get(backendOrigin))?.revocationEndpoint).toBe(`${backendOrigin}/api/auth/oauth2/revoke`);
     expect(await tokens.get(backendOrigin)).not.toHaveProperty('id_token');
+    expect((await tokens.get(backendOrigin))?.loginAttemptId).toBe(started.loginAttemptId);
     expect(await run(['logout', '--origin', frontend])).toBe(0);
     expect(requests.some(r => r.url === `${backendOrigin}/api/auth/oauth2/revoke` && r.method === 'POST')).toBe(true);
     expect(await tokens.list()).toEqual([]);
@@ -459,5 +462,58 @@ describe('discovery-independent confirmed logout', () => {
     expect(await runCommand(parseCliArgs(['logout', '--origin', frontend]), ctx)).toBe(1);
     expect(count).toBe(0);
     expect(await tokens.get(backend)).not.toBeNull();
+  });
+});
+
+
+describe('local exact login progress', () => {
+  const backend = 'https://backend.example.test';
+  const marker = '11111111-1111-4111-8111-111111111111';
+  const other = '22222222-2222-4222-8222-222222222222';
+  test('only the same completed backend and pending attempt can confirm completion', async () => {
+    const { ctx, out, tokens, pending } = makeContext();
+    let requests = 0;
+    setFetchForTests(async () => { requests++; throw new Error('Unexpected network'); });
+    const session = { origin: backend, email: null, frontendOrigin: 'https://frontend.example.test', access_token: 'fixture-access', refresh_token: 'fixture-refresh', expires_at: Date.now() + 3_600_000 };
+    const progress = async () => {
+      expect(await runCommand(parseCliArgs(['status', '--origin', backend, '--login-progress']), { ...ctx, stdin: marker })).toBe(0);
+      return JSON.parse(out.at(-1)!);
+    };
+    await tokens.put({ ...session, origin: 'https://other.example.test', loginAttemptId: marker });
+    await tokens.put({ ...session, loginAttemptId: other });
+    expect(await progress()).toEqual({ progress: 'ended' });
+    await pending.put({ origin: backend, loginAttemptId: marker, verifier: 'synthetic-verifier', state: 'synthetic-state', created_at: Date.now() });
+    expect(await progress()).toEqual({ progress: 'pending' });
+    // Even an old matching session cannot complete while a pending record exists.
+    await tokens.put({ ...session, loginAttemptId: marker });
+    expect(await progress()).toEqual({ progress: 'pending' });
+    await pending.put({ origin: backend, loginAttemptId: other, verifier: 'synthetic-verifier', state: 'synthetic-state', created_at: Date.now() });
+    expect(await progress()).toEqual({ progress: 'ended' });
+    await pending.remove(backend);
+    expect(await progress()).toEqual({ progress: 'completed', session: { origin: backend, frontendOrigin: session.frontendOrigin, email: null, accessTokenValid: true } });
+    expect(requests).toBe(0);
+    for (const secret of [marker, other, 'fixture-access', 'fixture-refresh', 'synthetic-state', 'synthetic-verifier']) expect(out.join()).not.toContain(secret);
+    expect(await runCommand(parseCliArgs(['status', '--json']), ctx)).toBe(0);
+    expect(out.at(-1)).not.toContain('loginAttemptId');
+  });
+  test('expired or cancelled pending attempts end without claiming successful login', async () => {
+    const { ctx, out, pending } = makeContext();
+    await pending.put({ origin: backend, loginAttemptId: marker, verifier: 'synthetic', state: 'synthetic', created_at: 0 });
+    expect(await runCommand(parseCliArgs(['status', '--origin', backend, '--login-progress']), { ...ctx, stdin: marker })).toBe(0);
+    expect(JSON.parse(out.at(-1)!)).toEqual({ progress: 'ended' });
+    await pending.remove(backend);
+    expect(await runCommand(parseCliArgs(['status', '--origin', backend, '--login-progress']), { ...ctx, stdin: marker })).toBe(0);
+    expect(JSON.parse(out.at(-1)!)).toEqual({ progress: 'ended' });
+  });
+  test('revoked refresh removes authoritative session; procedure denial alone preserves it', async () => {
+    const { ctx, tokens } = makeContext();
+    installHttpStub({ trpc: () => ({ status: 401, payload: { error: { json: { data: { code: 'UNAUTHORIZED' } } } } }) });
+    const session = { origin: ORIGIN, email: null, access_token: 'fixture-access', refresh_token: 'fixture-refresh', expires_at: Date.now() + 3_600_000 };
+    await tokens.put(session);
+    expect(await runCommand(parseCliArgs(['call', '--origin', ORIGIN, 'v3.agent.listThreads']), ctx)).toBe(1);
+    expect(await tokens.get(ORIGIN)).not.toBeNull();
+    await tokens.put({ ...session, expires_at: 0 });
+    expect(await runCommand(parseCliArgs(['call', '--origin', ORIGIN, 'v3.agent.listThreads']), ctx)).toBe(2);
+    expect(await tokens.get(ORIGIN)).toBeNull();
   });
 });

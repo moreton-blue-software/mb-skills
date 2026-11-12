@@ -131,6 +131,9 @@ mutually bound static pointer; authentication and sessions stay backend-bound.
 Without a pointer, only a missing document (HTTP 404) selects legacy v3.
 Transient discovery failures report retryable unavailability; logout uses the
 login-bound backend session without discovery and preserves unconfirmed sessions.
+Connected UI status reconciles local sessions after helper/terminal logout. The
+private paste box also closes when its exact pending login completes elsewhere;
+no login codes are sent through the conversation.
 No version bump or reinstall is needed: distribution tracks the marketplace's
 Git commit, with both loader version fields omitted. Feature-branch changes
 remain unreleased until merged into the tracked branch.
