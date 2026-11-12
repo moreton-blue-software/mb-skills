@@ -92,10 +92,11 @@ async function runHelper(
   helper: string,
   args: readonly string[],
   stdin = '',
+  timeoutMs = 360_000,
 ): Promise<HelperRun> {
   const { exitCode, stdout, stderr } = await $.process.run(['bun', helper, ...args], {
     // Up to six 45s public attempts plus code exchange and process overhead.
-    timeoutMs: 360_000,
+    timeoutMs,
     stdin,
   });
   return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
@@ -128,7 +129,9 @@ const helperMissing = (howTo: string) => `Embrace Claude Mod helper not found. S
 
 // --- shared flows -------------------------------------------------------------
 
-async function startLogin($: EngineInterface, options: PluginOptions, origin: string): Promise<string> {
+async function startLogin($: EngineInterface, options: PluginOptions, origin: string, runtime: Runtime): Promise<string> {
+  runtime.watch = undefined;
+  runtime.generation++;
   const helper = await resolveHelper($, options);
   if (!helper) return helperMissing('install');
   const started = await runHelper($, helper, ['login', '--origin', origin, '--url-only']);
@@ -149,7 +152,11 @@ async function startLogin($: EngineInterface, options: PluginOptions, origin: st
     message: 'Open the authorize URL, sign in, then paste the code from the finish page.',
     email: null,
   } satisfies EmbraceLoginState));
+  if (typeof payload?.loginAttemptId === 'string' && typeof payload.origin === 'string') {
+    runtime.watch = { origin: payload.origin, marker: payload.loginAttemptId, deadline: await $.clock.now() + 600_000 };
+  }
   await $.ui.open({ id: LOGIN_PANE, title: `Embrace login — ${hostOf(origin)}`, focus: true, closeOnEscape: true });
+  if (runtime.watch) startPolling($, options, runtime);
   return `Embrace login started for ${origin}. Finish it in the Embrace login pane: open the authorize URL, sign in, and paste the one-time code.`;
 }
 
@@ -187,7 +194,7 @@ async function listSessions($: EngineInterface, options: PluginOptions): Promise
   try {
     const helper = await resolveHelper($, options);
     if (!helper) return [];
-    const result = await runHelper($, helper, ['status', '--json']);
+    const result = await runHelper($, helper, ['status', '--json'], '', 5000);
     if (result.exitCode !== 0) return [];
     return parseSessions(parseHelperJson(result.stdout)?.sessions);
   } catch {
@@ -204,16 +211,21 @@ async function switchInstance($: EngineInterface, session: SessionRow): Promise<
   return `Switched to ${session.origin}${session.email ? ` (signed in as ${session.email})` : ''}.${expiryNote}`;
 }
 
-async function refreshStatusLine($: EngineInterface, options: PluginOptions): Promise<void> {
+async function refreshStatusLine($: EngineInterface, options: PluginOptions, current = () => true): Promise<void> {
   try {
     const [sessions, activeOrigin] = await Promise.all([
       listSessions($, options),
       $.store.get(ORIGIN_STORE_KEY),
     ]);
     const session = pickStatusSession(sessions, activeOrigin);
-    if (session) $.ui.status(`embrace: ${session.email ?? 'signed in'} @ ${sessionLocation(session)}`);
+    if (!current()) return;
+    $.ui.status(session ? `embrace: ${session.email ?? 'signed in'} @ ${sessionLocation(session)}` : undefined);
+    const state = await read($, login);
+    if (current() && state.phase === 'signed-in' && !sessions.some(row => row.origin === state.origin || row.frontendOrigin === state.origin)) {
+      await update($, login, previous => ({ ...previous, phase: 'idle', email: null, authorizeUrl: '', message: '' } satisfies EmbraceLoginState));
+    }
   } catch {
-    // Best-effort only; the status line stays unset.
+    if (current()) $.ui.status(undefined);
   }
 }
 
@@ -227,6 +239,7 @@ async function runConnect(
   options: PluginOptions,
   args: string,
   aliased: boolean,
+  runtime: Runtime,
 ): Promise<{ text: string }> {
   const note = aliased ? 'Note: /embrace-login still works; /embrace-connect is the current command.\n' : '';
   let requested = args.trim();
@@ -268,11 +281,70 @@ async function runConnect(
   }
   const origin = normalizeOrigin(requested);
   if (!origin) return { text: `Not a valid Embrace origin: ${requested}` };
-  const message = await startLogin($, options, origin);
+  const message = await startLogin($, options, origin, runtime);
   return { text: note + message };
 }
 
+interface Runtime {
+  timer?: ReturnType<EngineInterface['clock']['after']>;
+  generation: number;
+  stopped: boolean;
+  running: boolean;
+  monitor: boolean;
+  watch?: { origin: string; marker: string; deadline: number };
+}
+
+async function poll($: EngineInterface, options: PluginOptions, runtime: Runtime): Promise<void> {
+  if (runtime.running || runtime.stopped) return;
+  runtime.running = true;
+  const generation = runtime.generation;
+  const current = () => !runtime.stopped && generation === runtime.generation;
+  try {
+    await refreshStatusLine($, options, current);
+    const watch = runtime.watch;
+    if (!watch || !current()) return;
+    if (await $.clock.now() >= watch.deadline) {
+      runtime.watch = undefined;
+      await update($, login, previous => ({ ...previous, phase: 'error', authorizeUrl: '', message: 'Login watcher timed out; start again.' } satisfies EmbraceLoginState));
+      await $.ui.close({ id: LOGIN_PANE });
+      return;
+    }
+    const helper = await resolveHelper($, options);
+    if (!helper) return;
+    const result = await runHelper($, helper, ['status', '--origin', watch.origin, '--login-progress'], watch.marker, 5000);
+    if (!current() || runtime.watch !== watch) return;
+    const payload = parseHelperJson(result.stdout);
+    if (result.exitCode !== 0) return;
+    if (payload?.progress === 'completed') {
+      const session = parseSessions([payload.session])[0];
+      if (!session || session.origin !== watch.origin) return;
+      runtime.watch = undefined;
+      await update($, login, previous => ({ ...previous, phase: 'signed-in', origin: session.origin, email: session.email, authorizeUrl: '', message: '' } satisfies EmbraceLoginState));
+      await $.store.set(ORIGIN_STORE_KEY, session.origin);
+      $.ui.status(`embrace: ${session.email ?? 'signed in'} @ ${sessionLocation(session)}`);
+      await $.ui.close({ id: LOGIN_PANE });
+    } else if (payload?.progress === 'ended') {
+      runtime.watch = undefined;
+      await update($, login, previous => ({ ...previous, phase: 'idle', authorizeUrl: '', message: '' } satisfies EmbraceLoginState));
+      await $.ui.close({ id: LOGIN_PANE });
+    }
+  } catch {
+    // Local helper failures never imply completion; retry only within the watch deadline.
+  } finally {
+    runtime.running = false;
+    if (!runtime.stopped && (runtime.monitor || runtime.watch)) runtime.timer = $.clock.after(5000, () => { void poll($, options, runtime); });
+  }
+}
+
+function startPolling($: EngineInterface, options: PluginOptions, runtime: Runtime): void {
+  runtime.stopped = false;
+  runtime.timer?.cancel();
+  if (!runtime.running) void poll($, options, runtime);
+}
+
 export const register: Register = (on, options) => {
+  const runtime: Runtime = { generation: 0, stopped: true, running: false, monitor: false };
+
   on('prompt.compose', async ($, e, next) => {
     const result = await next(e);
     return { ...result, sections: appendQueryGuidance(result.sections, $.plugin.root) };
@@ -289,12 +361,34 @@ export const register: Register = (on, options) => {
       description: 'Alias of /embrace-connect (sign in to an Embrace instance)',
       argumentHint: '[origin]',
     });
-    void refreshStatusLine($, options);
+    runtime.timer?.cancel();
+    runtime.monitor = true;
+    runtime.stopped = false;
+    await poll($, options, runtime);
     return next(e);
   });
 
-  on('command.run', { command: 'embrace-connect' }, async ($, e) => runConnect($, options, e.args, false));
-  on('command.run', { command: 'embrace-login' }, async ($, e) => runConnect($, options, e.args, true));
+  on('session.end', ($, e, next) => {
+    runtime.watch = undefined;
+    runtime.generation++;
+    if (e.reason !== 'clear') {
+      runtime.stopped = true;
+      runtime.timer?.cancel();
+    }
+    return next(e);
+  });
+  on('ui.close', { id: LOGIN_PANE }, ($, e, next) => {
+    runtime.watch = undefined;
+    runtime.generation++;
+    if (!runtime.monitor) { runtime.stopped = true; runtime.timer?.cancel(); }
+    return next(e);
+  });
+  for (const command of ['embrace-connect', 'embrace-login']) on('command.run', { command }, async ($, e) => {
+    runtime.generation++;
+    await refreshStatusLine($, options);
+    runtime.generation++;
+    return runConnect($, options, e.args, command === 'embrace-login', runtime);
+  });
 
   on('ui.render', { component: 'Pane', requestId: LOGIN_PANE }, async ($, e, next) => {
     // Input exists on terminal, desktop and vscode; mobile cannot paste a code.
@@ -310,7 +404,12 @@ export const register: Register = (on, options) => {
             label="Close"
             role="dismiss"
             hotkey="x"
-            onPress={() => $.ui.close({ id: LOGIN_PANE })}
+            onPress={() => {
+              runtime.watch = undefined;
+              runtime.generation++;
+              if (!runtime.monitor) { runtime.stopped = true; runtime.timer?.cancel(); }
+              return $.ui.close({ id: LOGIN_PANE });
+            }}
           />
         </Box>
         {state.phase === 'awaiting-code' && (
@@ -333,14 +432,27 @@ export const register: Register = (on, options) => {
               label="One-time code"
               placeholder="paste the code here"
               submitLabel="sign in"
-              onSubmit={value => void completeLogin($, options, value)}
+              onSubmit={value => {
+                const watch = runtime.watch;
+                runtime.watch = undefined;
+                const generation = ++runtime.generation;
+                void completeLogin($, options, value).finally(async () => {
+                  if (runtime.stopped || generation !== runtime.generation) return;
+                  runtime.generation++;
+                  const state = await read($, login);
+                  if (state.phase === 'error' && watch) {
+                    runtime.watch = watch;
+                    startPolling($, options, runtime);
+                  }
+                });
+              }}
             />
           </Box>
         )}
         {state.phase === 'completing' && <Text dimColor>{state.message || 'Exchanging the code…'}</Text>}
         {state.phase === 'signed-in' && (
           <Box flexDirection="column">
-            <Text color="success">Signed in as {state.email ?? 'unknown email'}</Text>
+            <Text key="signed-in-identity" color="success">Signed in as {state.email ?? 'unknown email'}</Text>
             <Text dimColor>Use the helper's call command to run tRPC queries as this user.</Text>
           </Box>
         )}

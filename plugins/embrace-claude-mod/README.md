@@ -83,7 +83,20 @@ The login flow: the helper prints an authorize URL (PKCE S256, no client
 secret — public client); you open it in any browser, sign in, and the finish
 page shows a one-time code you paste back. The helper exchanges it and stores
 tokens in a 0600 file under `${XDG_STATE_HOME:-~/.local/state}/embrace-cli/`.
-The pane closes after a successful code submission. Use **Close**, its focused
+The pane closes after a successful code submission. It also watches that exact
+pending login for up to ten minutes: completing the same attempt with the private
+helper `login --complete` closes the box and retains its verified frontend label.
+An unrelated or older same-origin session cannot complete the pane. Closing,
+replacing, timing out or ending the session stops that watcher. A non-secret
+attempt marker lives only in existing pending/session metadata and module memory;
+it is independent of OAuth state/code and is not sent to the model.
+
+A serialized local-only status refresh reconciles identity about every five
+seconds. Mod/helper logout, external terminal logout, or a rejected refresh that
+removes the helper session clears the connected status and signed-in pane identity.
+An expired access token with a retained refreshable session is not logout; neither
+is a procedure-level authorization denial. Status polling stops on session exit
+and survives `/clear`. No watcher reads tokens into the plugin or logs codes. Use **Close**, its focused
 `x` shortcut, or Escape to dismiss it without signing out. In Claude Code's inline
 terminal renderer, mouse clicks on the frame's × may not be delivered; focus the
 pane with Ctrl+X then Tab, then press `x`, or use Ctrl+X then X. The native × was

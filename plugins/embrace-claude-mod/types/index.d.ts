@@ -7,6 +7,9 @@
 // session keys remain backend-origin-only after fresh mutual pointer verification.
 // Pending login keeps frontend display metadata. Sessions retain the login-bound
 // revocation endpoint for discovery-independent logout; no ID token is persisted.
+// A non-secret loginAttemptId correlates existing helper pending/session records.
+// Watchers keep it in module memory only, never prompt text or plugin state;
+// native timers reconcile status and bound exact completion watching to ten minutes.
 
 export type EmbraceLoginPhase = 'idle' | 'awaiting-code' | 'completing' | 'signed-in' | 'error';
 
