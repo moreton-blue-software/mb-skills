@@ -10,7 +10,7 @@ const ORIGIN = 'https://example.test';
 const fixture = () => ({
   product: 'embrace-v2', instance: { id: 'fixture-instance' }, issuer: `${ORIGIN}/api/auth`,
   api: { transport: 'trpc', baseUrl: ORIGIN, procedureDiscovery: false, initialAllowedProcedure: INITIAL_V2_PROCEDURE },
-  approvalMode: 'app-origin',
+  approvalMode: 'split-origin',
 });
 const backend: Extract<Backend, { product: 'embrace-v2' }> = { product: 'embrace-v2', baseUrl: ORIGIN, procedureDiscovery: false as const, initialAllowedProcedure: INITIAL_V2_PROCEDURE };
 const token = { origin: ORIGIN, access_token: 'fixture-access', refresh_token: 'fixture-refresh', expires_at: Date.now() + 3_600_000, email: null };
@@ -63,6 +63,9 @@ describe('connection detection', () => {
     ['discovery missing', () => ({ ...fixture(), api: { ...fixture().api, procedureDiscovery: undefined } })],
     ['initial procedure disagreement', () => ({ ...fixture(), api: { ...fixture().api, initialAllowedProcedure: 'core.other.query' } })],
     ['approval mode', () => ({ ...fixture(), approvalMode: 'unknown' })],
+    ['obsolete review mode', () => ({ ...fixture(), approvalMode: 'review-split-origin' })],
+    ['app mode', () => ({ ...fixture(), approvalMode: 'app-origin' })],
+    ['missing approval mode', () => ({ ...fixture(), approvalMode: undefined })],
   ];
   for (const [name, document] of invalidDocuments) test(`fails closed: ${name}`, async () => {
     setFetchForTests(async () => Response.json(document()));
@@ -101,7 +104,7 @@ describe('connection detection', () => {
   test('accepts the builder omission when no initial API permission is registered', async () => {
     const document = fixture();
     delete (document.api as { initialAllowedProcedure?: string }).initialAllowedProcedure;
-    document.approvalMode = 'review-split-origin';
+    document.approvalMode = 'split-origin';
     setFetchForTests(async () => Response.json(document));
     expect(await detectBackend(ORIGIN)).toEqual({ product: 'embrace-v2', baseUrl: ORIGIN, procedureDiscovery: false });
   });
@@ -259,10 +262,10 @@ describe('backend-aware CLI', () => {
 });
 
 
-const FRONTEND = 'https://frontend.example.test';
+const FRONTEND = 'https://review.example.test';
 const pointerFixture = () => ({ product: 'embrace-v2', kind: 'frontend-pointer', version: 1,
   instance: { id: 'fixture-instance' }, backendOrigin: ORIGIN });
-const boundDocument = (approvalMode = 'review-split-origin') => ({ ...fixture(), approvalMode, frontendOrigins: [FRONTEND] });
+const boundDocument = (approvalMode = 'split-origin') => ({ ...fixture(), approvalMode, frontendOrigins: [FRONTEND] });
 
 describe('frontend pointer mutual binding', () => {
   function install(options: { initial?: () => Response; pointer?: unknown; document?: unknown } = {}) {
@@ -280,7 +283,7 @@ describe('frontend pointer mutual binding', () => {
     });
     return requests;
   }
-  for (const approvalMode of ['review-split-origin', 'split-origin']) test(`${approvalMode}: resolves a single mutually bound pointer after 404 or HTML without credentials`, async () => {
+  for (const approvalMode of ['split-origin']) test(`${approvalMode}: resolves a single mutually bound pointer after 404 or HTML without credentials`, async () => {
     for (const initial of [() => new Response(null, { status: 404 }), () => new Response('<html>SPA</html>')]) {
       const requests = install({ initial, document: boundDocument(approvalMode) });
       expect(await resolveConnection(FRONTEND)).toEqual({ origin: ORIGIN, frontendOrigin: FRONTEND, backend });
@@ -309,7 +312,7 @@ describe('frontend pointer mutual binding', () => {
       expect(requests).toHaveLength(2);
     }
   });
-  for (const approvalMode of ['review-split-origin', 'split-origin']) test(`${approvalMode}: additional frontend members are allowed; normalized entered origin must be an exact member`, async () => {
+  for (const approvalMode of ['split-origin']) test(`${approvalMode}: additional frontend members are allowed; normalized entered origin must be an exact member`, async () => {
     install({ document: { ...boundDocument(approvalMode), frontendOrigins: ['https://other.example.test', FRONTEND] } });
     expect((await resolveConnection(FRONTEND)).origin).toBe(ORIGIN);
   });
@@ -335,18 +338,19 @@ describe('frontend pointer mutual binding', () => {
   });
   const invalidBindings: [string, () => unknown][] = [
     ['id mismatch', () => ({ ...boundDocument(), instance: { id: 'other-fixture' } })],
-    ['missing frontendOrigins', () => ({ ...fixture(), approvalMode: 'review-split-origin' })],
+    ['missing frontendOrigins', () => ({ ...fixture(), approvalMode: 'split-origin' })],
     ['empty frontendOrigins', () => ({ ...boundDocument(), frontendOrigins: [] })],
     ['wrong frontend', () => ({ ...boundDocument(), frontendOrigins: ['https://other.example.test'] })],
     ['nonexact frontend', () => ({ ...boundDocument(), frontendOrigins: [`${FRONTEND}/`] })],
     ['string frontendOrigins', () => ({ ...boundDocument(), frontendOrigins: FRONTEND })],
+    ['obsolete approval mode', () => ({ ...boundDocument(), approvalMode: 'review-split-origin' })],
     ['wrong approval mode', () => ({ ...boundDocument(), approvalMode: 'app-origin' })],
     ['unknown approval mode', () => ({ ...boundDocument(), approvalMode: 'unknown' })],
     ['issuer mismatch', () => ({ ...boundDocument(), issuer: `${FRONTEND}/api/auth` })],
     ['API mismatch', () => ({ ...boundDocument(), api: { ...fixture().api, baseUrl: FRONTEND } })],
     ['chain', () => pointerFixture()],
   ];
-  for (const approvalMode of ['review-split-origin', 'split-origin']) {
+  for (const approvalMode of ['split-origin']) {
     for (const [name, document] of invalidBindings) test(`${approvalMode}: rejects binding ${name} without following a second pointer`, async () => {
       const candidate = document() as Record<string, unknown>;
       const requests = install({ document: name.includes('approval mode') || name === 'chain' ? candidate : { ...candidate, approvalMode } });
