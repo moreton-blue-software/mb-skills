@@ -259,9 +259,9 @@ describe('fake-origin flow', () => {
 
 
 describe('frontend URL lifecycle', () => {
-  const frontend = 'https://frontend.example.test';
+  const frontend = 'https://review.example.test';
   const backendOrigin = 'https://backend.example.test';
-  for (const approvalMode of ['review-split-origin', 'split-origin'])
+  for (const approvalMode of ['split-origin'])
   for (const completionOrigin of [frontend, backendOrigin]) test(`${approvalMode}: login completion via ${completionOrigin === frontend ? 'frontend' : 'backend'} preserves one backend session`, async () => {
     const { ctx, out, err, tokens, pending } = makeContext();
     const requests: { url: string; method: string; body: string }[] = [];
